@@ -33,6 +33,7 @@ api.add_router("/power/", compare_router)
 
 urlpatterns = [
     path("", TemplateView.as_view(template_name="power/forecast.html"), name="home"),
+    path("dashboard/", TemplateView.as_view(template_name="power/dashboard.html"), name="dashboard"),
     path('admin/', admin.site.urls),
     path("api/", api.urls),
 ]

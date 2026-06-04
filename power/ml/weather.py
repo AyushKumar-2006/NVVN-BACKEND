@@ -341,13 +341,103 @@ def _climatology_daily(coords, target_dates, state_short, years, today):
     return out
 
 
+# ---------------------------------------------------------------------------
+# Open-Meteo Climate API (downscaled CMIP6, 1950-2050). Used to build a true
+# multi-decade temperature normal for the days beyond the ~16-day forecast
+# horizon (days ~17-30 of the 30-day forecast), which is far more stable than
+# borrowing a single recent year from the archive.
+#   https://climate-api.open-meteo.com/v1/climate
+# ---------------------------------------------------------------------------
+CLIMATE_URL = "https://climate-api.open-meteo.com/v1/climate"
+CLIMATE_NORMAL_YEARS = 30
+CLIMATE_MODEL = "MRI_AGCM3_2_S"  # ~20 km high-res model, good coverage over India
+
+
+def _climate_normal_daily(coords, target_dates, state_short, years=CLIMATE_NORMAL_YEARS):
+    """
+    `years`-year temperature normal for the given calendar days via the
+    Open-Meteo Climate API.
+
+    Pulls daily mean temperature for the continuous calendar window spanning the
+    target days across the past `years` years (one request), then averages each
+    (month, day) over those years. Returns {date: temp_or_None}.
+    """
+    end_year = datetime.now().year - 1
+    start_year = end_year - (years - 1)
+    md_start, md_end = min(target_dates), max(target_dates)
+
+    def _safe(y, d):
+        try:
+            return date(y, d.month, d.day)
+        except ValueError:  # e.g. Feb 29 in a non-leap proxy year
+            return date(y, d.month, min(d.day, 28))
+
+    range_start = _safe(start_year, md_start)
+    range_end = _safe(end_year, md_end)
+
+    params = {
+        "latitude": round(coords["lat"], 4),
+        "longitude": round(coords["lon"], 4),
+        "start_date": range_start.isoformat(),
+        "end_date": range_end.isoformat(),
+        "models": CLIMATE_MODEL,
+        "daily": "temperature_2m_mean",
+        "timezone": "Asia/Kolkata",
+    }
+
+    data = None
+    for attempt in range(3):
+        try:
+            r = requests.get(CLIMATE_URL, params=params, timeout=60)
+            r.raise_for_status()
+            data = r.json()
+            break
+        except Exception as e:
+            if attempt == 2:
+                logger.error(
+                    f"[{state_short}] Climate-API normal failed "
+                    f"{range_start}..{range_end}: {e}"
+                )
+                return {d: None for d in target_dates}
+            time.sleep(2)
+
+    daily = (data or {}).get("daily", {})
+    times = daily.get("time") or []
+    # Single-model responses use the bare variable name; be tolerant of a
+    # model-suffixed key (e.g. temperature_2m_mean_MRI_AGCM3_2_S) just in case.
+    temp_key = next((k for k in daily if k.startswith("temperature_2m_mean")), None)
+    temps_arr = daily.get(temp_key) if temp_key else None
+    if not times or not temps_arr:
+        logger.warning(f"[{state_short}] Climate-API returned no data {range_start}..{range_end}")
+        return {d: None for d in target_dates}
+
+    by_md = {}  # (month, day) -> [temps]
+    for t, val in zip(times, temps_arr):
+        if val is None:
+            continue
+        d = datetime.strptime(t, "%Y-%m-%d").date()
+        by_md.setdefault((d.month, d.day), []).append(float(val))
+
+    out = {}
+    for d in target_dates:
+        vals = by_md.get((d.month, d.day), [])
+        out[d] = round(sum(vals) / len(vals), 2) if vals else None
+
+    filled = sum(1 for v in out.values() if v is not None)
+    logger.info(
+        f"[{state_short}] Climate-API {years}-yr normal "
+        f"({start_year}-{end_year}) filled {filled}/{len(target_dates)} day(s)"
+    )
+    return out
+
+
 def fetch_daily_weather(state_short: str, from_date, days: int = 30, climatology_years: int = 3):
     """
     Daily mean temperature for `days` days starting at `from_date`.
 
     Returns a list aligned to the date range. Each item is a dict
     {"date", "temperature_c", "source"} where source is
-    "forecast" | "archive" | "climatology".
+    "forecast" | "archive" | "climatology_30yr" | "climatology" | "fallback".
     """
     if state_short not in STATE_COORDS:
         raise ValueError(f"State coords missing: {state_short}")
@@ -379,13 +469,23 @@ def fetch_daily_weather(state_short: str, from_date, days: int = 30, climatology
             temps[row["date"]] = (None if row["temp"] is None else round(float(row["temp"]), 2))
             source[row["date"]] = "forecast"
 
-    # 3) beyond horizon (or any gaps) -> climatology
+    # 3) beyond horizon (days ~17-30, or any gaps) -> 30-year climate normal
+    #    from the Open-Meteo Climate API. The legacy archive proxy is kept as a
+    #    secondary fallback for any day the climate API can't fill.
     remaining = [d for d in target_dates if temps.get(d) is None]
     if remaining:
-        clim = _climatology_daily(coords, remaining, state_short, climatology_years, today)
+        clim = _climate_normal_daily(coords, remaining, state_short, CLIMATE_NORMAL_YEARS)
         for d, t in clim.items():
-            temps[d] = t
-            source[d] = "climatology"
+            if t is not None:
+                temps[d] = t
+                source[d] = "climatology_30yr"
+
+        still_missing = [d for d in remaining if temps.get(d) is None]
+        if still_missing:
+            proxy = _climatology_daily(coords, still_missing, state_short, climatology_years, today)
+            for d, t in proxy.items():
+                temps[d] = t
+                source[d] = "climatology"
 
     # fill any leftover gaps with the mean of what we have (keep response clean)
     known = [v for v in temps.values() if v is not None]

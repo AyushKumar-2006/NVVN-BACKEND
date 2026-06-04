@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Power Forecast Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg: #0f172a; --panel: #1e293b; --panel-2: #273449;
+      --text: #e2e8f0; --muted: #94a3b8; --accent: #38bdf8;
+      --accent-2: #f59e0b; --border: #334155; --danger: #f87171;
+      --green: #34d399; --amber: #fbbf24; --red: #f87171;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg); color: var(--text); line-height: 1.5;
+    }
+    .wrap { max-width: 1200px; margin: 0 auto; padding: 24px 20px 60px; }
+    h1 { font-size: 22px; margin: 0 0 4px; }
+    h2 { font-size: 16px; margin: 0 0 14px; color: var(--text); }
+    .sub { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
+    .controls {
+      display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end;
+      background: var(--panel); border: 1px solid var(--border);
+      border-radius: 12px; padding: 16px 18px; margin-bottom: 18px;
+    }
+    .field { display: flex; flex-direction: column; gap: 6px; }
+    .field label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+    select, input[type="date"] {
+      background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+      border-radius: 8px; padding: 9px 11px; font-size: 14px; min-width: 200px; outline: none;
+    }
+    select:focus, input:focus { border-color: var(--accent); }
+    button {
+      background: var(--accent); color: #06283a; border: none; border-radius: 8px;
+      padding: 10px 20px; font-size: 14px; font-weight: 600; cursor: pointer; transition: opacity .15s;
+    }
+    button:hover { opacity: .9; }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 18px; }
+    .card {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px;
+    }
+    .card .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+    .card .v { font-size: 20px; font-weight: 600; margin-top: 4px; }
+    .card .v small { font-size: 12px; color: var(--muted); font-weight: 400; }
+    .panel {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+      padding: 18px; margin-bottom: 18px;
+    }
+    .chart-box { position: relative; height: 360px; }
+    .status { font-size: 13px; color: var(--muted); margin: 0 0 12px; min-height: 18px; }
+    .status.error { color: var(--danger); }
+    .hidden { display: none; }
+    .badges { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+    .badge { font-size: 11px; background: var(--panel-2); border: 1px solid var(--border); color: var(--muted); padding: 3px 9px; border-radius: 999px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+    th { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; position: sticky; top: 0; background: var(--panel); }
+    tbody tr:hover { background: var(--panel-2); }
+    .table-scroll { max-height: 540px; overflow: auto; border-radius: 8px; }
+    .num { text-align: right; font-variant-numeric: tabular-nums; }
+    .risk { font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 999px; display: inline-block; }
+    .risk.NORMAL { background: rgba(52,211,153,.15); color: var(--green); border: 1px solid rgba(52,211,153,.35); }
+    .risk.HIGH { background: rgba(251,191,36,.15); color: var(--amber); border: 1px solid rgba(251,191,36,.4); }
+    .risk.CRITICAL { background: rgba(248,113,113,.18); color: var(--red); border: 1px solid rgba(248,113,113,.45); }
+    .weekend td { color: var(--muted); }
+    .risk-summary { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+    .pill { font-size: 12px; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--border); }
+    .pill b { font-size: 15px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>⚡ Power Forecast Dashboard</h1>
+    <div class="sub">5-min &amp; 30-day load forecasts with risk levels, temperature, and predicted-vs-actual accuracy &middot; Django + ML</div>
+
+    <div class="controls">
+      <div class="field">
+        <label for="state">State</label>
+        <select id="state"><option>Loading…</option></select>
+      </div>
+      <div class="field">
+        <label for="date">Forecast date</label>
+        <input type="date" id="date" />
+      </div>
+      <button id="go">Load Dashboard</button>
+    </div>
+
+    <!-- ============ 5-MIN FORECAST ============ -->
+    <div class="panel">
+      <h2>5-Minute Load Forecast</h2>
+      <div id="status5" class="status"></div>
+      <div id="summary" class="cards hidden"></div>
+      <div class="chart-box"><canvas id="chart5"></canvas></div>
+    </div>
+
+    <!-- ============ PREDICTED VS ACTUAL ============ -->
+    <div class="panel">
+      <h2>Predicted vs Actual (recent days)</h2>
+      <div id="statusCmp" class="status"></div>
+      <div id="cmpSummary" class="cards hidden"></div>
+      <div class="chart-box"><canvas id="chartCmp"></canvas></div>
+    </div>
+
+    <!-- ============ 30-DAY FORECAST ============ -->
+    <div class="panel">
+      <h2>30-Day Forecast &amp; Risk Levels</h2>
+      <div id="status30" class="status"></div>
+      <div id="riskSummary" class="risk-summary hidden"></div>
+      <div class="table-scroll">
+        <table id="table30">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Weekday</th>
+              <th class="num">Predicted Peak (MW)</th>
+              <th class="num">Predicted Avg (MW)</th>
+              <th class="num">% of Hist. Peak</th>
+              <th>Risk</th>
+              <th class="num">Temp (°C)</th>
+              <th>Weather Src</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const API = "/api/power";
+    const stateSel = document.getElementById("state");
+    const dateInp = document.getElementById("date");
+    const goBtn = document.getElementById("go");
+
+    let chart5 = null, chartCmp = null;
+
+    function setStatus(id, msg, isError = false) {
+      const el = document.getElementById(id);
+      el.textContent = msg || "";
+      el.classList.toggle("error", !!isError);
+    }
+
+    function card(k, v, unit = "") {
+      return `<div class="card"><div class="k">${k}</div><div class="v">${v ?? "—"}${unit && v != null ? ` <small>${unit}</small>` : ""}</div></div>`;
+    }
+
+    // ---- 1. Populate the state dropdown ----
+    async function loadStates() {
+      try {
+        const res = await fetch(`${API}/states/in`);
+        if (!res.ok) throw new Error(`states/in -> HTTP ${res.status}`);
+        const states = await res.json();
+        states.sort((a, b) => a.name.localeCompare(b.name));
+        stateSel.innerHTML = "";
+        for (const s of states) {
+          const opt = document.createElement("option");
+          opt.value = s.code;
+          opt.textContent = `${s.name} (${s.code})`;
+          stateSel.appendChild(opt);
+        }
+        // Default to Chhattisgarh — a state with a trained model.
+        if ([...stateSel.options].some(o => o.value === "CHG")) stateSel.value = "CHG";
+      } catch (e) {
+        stateSel.innerHTML = `<option>Failed to load states</option>`;
+        setStatus("status5", String(e), true);
+      }
+    }
+
+    // ---- 2. 5-minute forecast line chart ----
+    async function load5Min(code, date) {
+      setStatus("status5", "Fetching 5-min forecast…");
+      document.getElementById("summary").classList.add("hidden");
+      try {
+        const url = `${API}/forecast-5min?state_code=${encodeURIComponent(code)}&forecast_date=${encodeURIComponent(date)}`;
+        const res = await fetch(url);
+        const d = await res.json();
+        if (!res.ok) throw new Error(d.detail || d.message || `HTTP ${res.status}`);
+
+        const badges = [d.season, d.weekday, d.is_weekend ? "Weekend" : "Weekday", d.is_holiday ? "Holiday" : null]
+          .filter(Boolean).map(b => `<span class="badge">${b}</span>`).join("");
+        document.getElementById("summary").innerHTML =
+          card("State", d.state) + card("Date", d.date) +
+          card("Average load", d.average_load_mw, "MW") +
+          card("Peak load", d.peak_load_mw, "MW") +
+          card("Energy/day", d.energy_consumption_mu_per_day, "MU") +
+          `<div class="card"><div class="k">Calendar</div><div class="badges">${badges}</div></div>`;
+        document.getElementById("summary").classList.remove("hidden");
+
+        const labels = d.points.map(p => p.datetime.slice(11, 16));
+        const mw = d.points.map(p => p.mw);
+        const temp = d.points.map(p => p.temperature);
+        if (chart5) chart5.destroy();
+        chart5 = new Chart(document.getElementById("chart5"), {
+          type: "line",
+          data: { labels, datasets: [
+            { label: "Load (MW)", data: mw, yAxisID: "y",
+              borderColor: "#38bdf8", backgroundColor: "rgba(56,189,248,.12)",
+              borderWidth: 2, pointRadius: 0, tension: .25, fill: true },
+            { label: "Temperature (°C)", data: temp, yAxisID: "y1",
+              borderColor: "#f59e0b", borderWidth: 1.5, borderDash: [4, 3],
+              pointRadius: 0, tension: .25, fill: false },
+          ]},
+          options: {
+            responsive: true, maintainAspectRatio: false,
+            interaction: { mode: "index", intersect: false },
+            plugins: { legend: { labels: { color: "#e2e8f0" } },
+              tooltip: { callbacks: { title: items => `Time ${items[0].label}` } } },
+            scales: {
+              x: { ticks: { color: "#94a3b8", maxTicksLimit: 24, autoSkip: true }, grid: { color: "rgba(148,163,184,.08)" } },
+              y: { position: "left", title: { display: true, text: "MW", color: "#94a3b8" }, ticks: { color: "#94a3b8" }, grid: { color: "rgba(148,163,184,.12)" } },
+              y1: { position: "right", title: { display: true, text: "°C", color: "#94a3b8" }, ticks: { color: "#94a3b8" }, grid: { drawOnChartArea: false } },
+            },
+          },
+        });
+        setStatus("status5", `Loaded ${d.points.length} points for ${d.state} on ${d.date}.`);
+      } catch (e) {
+        setStatus("status5", `Error: ${e.message}`, true);
+        if (chart5) { chart5.destroy(); chart5 = null; }
+      }
+    }
+
+    // ---- 3. Predicted vs Actual comparison chart ----
+    async function loadCompare(code) {
+      setStatus("statusCmp", "Fetching predicted-vs-actual accuracy…");
+      document.getElementById("cmpSummary").classList.add("hidden");
+      try {
+        const url = `${API}/forecast-accuracy?state_code=${encodeURIComponent(code)}&days=30`;
+        const res = await fetch(url);
+        const d = await res.json();
+        if (!res.ok) throw new Error(d.detail || d.message || `HTTP ${res.status}`);
+
+        const rows = (d.daily || []).filter(r => r.actual_avg_mw != null && r.predicted_avg_mw != null);
+        if (!rows.length) {
+          if (chartCmp) { chartCmp.destroy(); chartCmp = null; }
+          setStatus("statusCmp", "No actual data available to compare for this state.", true);
+          return;
+        }
+
+        document.getElementById("cmpSummary").innerHTML =
+          card("Days evaluated", d.days_evaluated) +
+          card("Overall accuracy", d.overall?.accuracy_pct, "%") +
+          card("Overall MAPE", d.overall?.mape_pct, "%") +
+          card("Best day", d.best_day ? `${d.best_day.accuracy_pct}%` : "—") +
+          card("Worst day", d.worst_day ? `${d.worst_day.accuracy_pct}%` : "—");
+        document.getElementById("cmpSummary").classList.remove("hidden");
+
+        const labels = rows.map(r => r.date);
+        const predicted = rows.map(r => r.predicted_avg_mw);
+        const actual = rows.map(r => r.actual_avg_mw);
+        if (chartCmp) chartCmp.destroy();
+        chartCmp = new Chart(document.getElementById("chartCmp"), {
+          type: "line",
+          data: { labels, datasets: [
+            { label: "Predicted avg (MW)", data: predicted,
+              borderColor: "#38bdf8", backgroundColor: "rgba(56,189,248,.12)",
+              borderWidth: 2, pointRadius: 2, tension: .2, fill: false },
+            { label: "Actual avg (MW)", data: actual,
+              borderColor: "#34d399", backgroundColor: "rgba(52,211,153,.12)",
+              borderWidth: 2, pointRadius: 2, tension: .2, fill: false },
+          ]},
+          options: {
+            responsive: true, maintainAspectRatio: false,
+            interaction: { mode: "index", intersect: false },
+            plugins: { legend: { labels: { color: "#e2e8f0" } } },
+            scales: {
+              x: { ticks: { color: "#94a3b8", maxTicksLimit: 15, autoSkip: true }, grid: { color: "rgba(148,163,184,.08)" } },
+              y: { title: { display: true, text: "MW", color: "#94a3b8" }, ticks: { color: "#94a3b8" }, grid: { color: "rgba(148,163,184,.12)" } },
+            },
+          },
+        });
+        setStatus("statusCmp", `Compared ${rows.length} days for ${d.state} (${d.date_range?.from} → ${d.date_range?.to}).`);
+      } catch (e) {
+        setStatus("statusCmp", `Error: ${e.message}`, true);
+        if (chartCmp) { chartCmp.destroy(); chartCmp = null; }
+      }
+    }
+
+    // ---- 4. 30-day forecast table with risk levels + temperature ----
+    function riskClass(level) {
+      if (level === "CRITICAL") return "CRITICAL";
+      if (level === "HIGH RISK") return "HIGH";
+      return "NORMAL";
+    }
+
+    async function load30Day(code, fromDate) {
+      setStatus("status30", "Fetching 30-day forecast…");
+      document.getElementById("riskSummary").classList.add("hidden");
+      const tbody = document.querySelector("#table30 tbody");
+      tbody.innerHTML = "";
+      try {
+        const url = `${API}/forecast-30day?state_code=${encodeURIComponent(code)}&from_date=${encodeURIComponent(fromDate)}`;
+        const res = await fetch(url);
+        const d = await res.json();
+        if (!res.ok) throw new Error(d.detail || d.message || `HTTP ${res.status}`);
+
+        const rs = d.risk_summary || {};
+        document.getElementById("riskSummary").innerHTML =
+          `<span class="pill">Historical peak <b>${d.historical_peak_mw ?? "—"}</b> MW</span>` +
+          `<span class="pill risk NORMAL">NORMAL <b>${rs.normal_days ?? 0}</b></span>` +
+          `<span class="pill risk HIGH">HIGH RISK <b>${rs.high_risk_days ?? 0}</b></span>` +
+          `<span class="pill risk CRITICAL">CRITICAL <b>${rs.critical_days ?? 0}</b></span>`;
+        document.getElementById("riskSummary").classList.remove("hidden");
+
+        for (const day of (d.days || [])) {
+          const tr = document.createElement("tr");
+          if (day.is_weekend) tr.classList.add("weekend");
+          tr.innerHTML =
+            `<td>${day.date}${day.is_holiday ? " 🏖️" : ""}</td>` +
+            `<td>${day.weekday}</td>` +
+            `<td class="num">${day.predicted_peak_load_mw}</td>` +
+            `<td class="num">${day.predicted_average_load_mw}</td>` +
+            `<td class="num">${day.peak_pct_of_historical}%</td>` +
+            `<td><span class="risk ${riskClass(day.risk_level)}">${day.risk_level}</span></td>` +
+            `<td class="num">${day.temperature_c ?? "—"}</td>` +
+            `<td>${day.weather_source ?? "—"}</td>`;
+          tbody.appendChild(tr);
+        }
+        setStatus("status30", `Loaded ${(d.days || []).length} days for ${d.state} (${d.from_date} → ${d.to_date}).`);
+      } catch (e) {
+        setStatus("status30", `Error: ${e.message}`, true);
+      }
+    }
+
+    // ---- orchestrate ----
+    async function loadAll() {
+      const code = stateSel.value;
+      const date = dateInp.value;
+      if (!code || !date) { setStatus("status5", "Pick a state and date.", true); return; }
+      goBtn.disabled = true;
+      try {
+        await Promise.allSettled([
+          load5Min(code, date),
+          loadCompare(code),
+          load30Day(code, date),
+        ]);
+      } finally {
+        goBtn.disabled = false;
+      }
+    }
+
+    // ---- init ----
+    dateInp.value = new Date().toISOString().slice(0, 10); // today (YYYY-MM-DD)
+    goBtn.addEventListener("click", loadAll);
+    loadStates().then(loadAll);
+  </script>
+</body>
+</html>
