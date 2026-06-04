@@ -1,3 +1,5 @@
+import pandas as pd
+
 # import os
 # import pandas as pd
 # from power.ml.models.xgb_model import train_xgb_model
@@ -199,8 +201,11 @@ def train_state_5min_model(state: str):
     # -----------------------------
     # RESAMPLE
     # -----------------------------
+    # Only the target `y` is needed downstream; selecting it keeps the
+    # resample numeric (discom columns are all-NULL/object dtype for states
+    # like CG and would otherwise break .interpolate()).
     df = (
-        raw.set_index("datetime")
+        raw.set_index("datetime")[["y"]]
         .resample("5min")
         .mean()
         .interpolate()

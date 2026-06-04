@@ -20,6 +20,8 @@ from ninja.pagination import paginate, PageNumberPagination
 from ninja.errors import HttpError
 import requests
 from power.schemas import MeritStateCurrentOut
+from datetime import date
+from power.ml.pridiction.predict_state_30day import build_30day_forecast_response
 
 
 
@@ -285,6 +287,63 @@ def forecast_5min(request, state_code: StateShortEnum, query: DateQuerySchema = 
     start_date=query.forecast_date
     data = build_5min_forecast_response(state=state_code, forecast_date=start_date)
     return data
+
+
+
+
+@router.get("/forecast-30day", response={200: dict})
+def forecast_30day(request, state_code: StateShortEnum, from_date: date = Query(...)):
+    """
+    **URL:** GET /forecast-30day
+    **Description:** 30-day-ahead daily load forecast using Facebook Prophet
+    (free / open source). Returns per-day predicted peak & average load, a free
+    weather temperature for each day, and a High-Risk-Day classification.
+
+    **Query Params:**
+    - state_code: Short code of the state (Dropdown)
+      -- example: DL, CHG, MHA, UP, AP, ...
+    - from_date: YYYY-MM-DD — first day of the 30-day window
+
+    **Risk levels** (predicted daily peak vs historical peak):
+    - NORMAL
+    - HIGH RISK  (>= 85% of historical peak)
+    - CRITICAL   (>= 95% of historical peak)
+
+    **Weather** (free only): Open-Meteo forecast for the first ~16 days,
+    Open-Meteo archive climatology (same calendar day averaged over the past
+    3 years) for the remaining days.
+
+    **Response 200 OK Example:**
+    ```json
+    {
+        "state": "CG",
+        "state_code": "CG",
+        "model": "prophet",
+        "from_date": "2026-07-01",
+        "to_date": "2026-07-30",
+        "days_forecasted": 30,
+        "historical_peak_mw": 4525.0,
+        "risk_thresholds_mw": {"high_risk": 3846.25, "critical": 4298.75},
+        "risk_summary": {"normal_days": 25, "high_risk_days": 4, "critical_days": 1},
+        "days": [
+            {
+                "date": "2026-07-01",
+                "weekday": "Wednesday",
+                "is_weekend": false,
+                "is_holiday": false,
+                "predicted_peak_load_mw": 3990.12,
+                "predicted_average_load_mw": 3320.55,
+                "peak_pct_of_historical": 88.2,
+                "risk_level": "HIGH RISK",
+                "temperature_c": 27.3,
+                "weather_source": "climatology"
+            }
+        ]
+    }
+    ```
+    """
+    short = MERIT_TO_SHORT_MAP.get(state_code.value, state_code.value)
+    return build_30day_forecast_response(state=short, from_date=from_date)
 
 
 

@@ -18,8 +18,10 @@ from django.contrib import admin
 from django.urls import path
 from django.conf import settings
 from django.conf.urls.static import static
+from django.views.generic import TemplateView
 from ninja import NinjaAPI
 from power.api import router as power_router
+from power.api_compare import router as compare_router
 
 
 
@@ -27,8 +29,10 @@ from power.api import router as power_router
 api = NinjaAPI()
 
 api.add_router("/power/", power_router)
+api.add_router("/power/", compare_router)
 
 urlpatterns = [
+    path("", TemplateView.as_view(template_name="power/forecast.html"), name="home"),
     path('admin/', admin.site.urls),
     path("api/", api.urls),
 ]

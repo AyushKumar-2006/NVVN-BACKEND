@@ -146,7 +146,7 @@
 
 
 
-#peak load manage kiya gya h dynamically
+#peak load manage dynamically
 import pandas as pd
 from datetime import timedelta
 from power.utils.metadata import add_calendar_features

@@ -1,0 +1,19 @@
+# Extra / pinned dependencies for the 30-day Prophet forecast feature.
+# All free and open source.
+#
+# Install on top of requirements.txt:
+#     pip install -r requirements-30day.txt
+#
+# Why these pins:
+# The project runs on numpy 2.4. Facebook Prophet imports cmdstanpy, which
+# imports xarray; the older xarray/numexpr/bottleneck builds were compiled
+# against numpy 1.x and crash under numpy 2.x (e.g. xarray used the removed
+# `np.unicode_`). The versions below are numpy-2 compatible and let Prophet's
+# Stan backend load cleanly.
+
+prophet==1.3.0          # forecasting model (free / open source)
+cmdstanpy==1.3.0        # Prophet's Stan backend
+xarray>=2025.1.0        # numpy-2 compatible (old 2023.x crashed on np.unicode_)
+numexpr>=2.10.0         # numpy-2 compatible build
+bottleneck>=1.4.0       # numpy-2 compatible build
+holidays>=0.88          # Indian holiday calendar used by Prophet

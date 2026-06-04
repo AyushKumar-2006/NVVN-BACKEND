@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Power Load Forecast (5-min)</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg: #0f172a; --panel: #1e293b; --panel-2: #273449;
+      --text: #e2e8f0; --muted: #94a3b8; --accent: #38bdf8;
+      --accent-2: #f59e0b; --border: #334155; --danger: #f87171;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg); color: var(--text); line-height: 1.5;
+    }
+    .wrap { max-width: 1100px; margin: 0 auto; padding: 24px 20px 60px; }
+    h1 { font-size: 22px; margin: 0 0 4px; }
+    .sub { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
+    .controls {
+      display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end;
+      background: var(--panel); border: 1px solid var(--border);
+      border-radius: 12px; padding: 16px 18px; margin-bottom: 18px;
+    }
+    .field { display: flex; flex-direction: column; gap: 6px; }
+    .field label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+    select, input[type="date"] {
+      background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+      border-radius: 8px; padding: 9px 11px; font-size: 14px; min-width: 200px; outline: none;
+    }
+    select:focus, input:focus { border-color: var(--accent); }
+    button {
+      background: var(--accent); color: #06283a; border: none; border-radius: 8px;
+      padding: 10px 20px; font-size: 14px; font-weight: 600; cursor: pointer; transition: opacity .15s;
+    }
+    button:hover { opacity: .9; }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 18px; }
+    .card {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px;
+    }
+    .card .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+    .card .v { font-size: 20px; font-weight: 600; margin-top: 4px; }
+    .card .v small { font-size: 12px; color: var(--muted); font-weight: 400; }
+    .chart-panel {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 18px;
+    }
+    .chart-box { position: relative; height: 420px; }
+    #status { font-size: 13px; color: var(--muted); margin-bottom: 12px; min-height: 18px; }
+    #status.error { color: var(--danger); }
+    .hidden { display: none; }
+    .badges { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+    .badge { font-size: 11px; background: var(--panel-2); border: 1px solid var(--border); color: var(--muted); padding: 3px 9px; border-radius: 999px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>⚡ Power Load Forecast</h1>
+    <div class="sub">5-minute interval predictions (288 points/day) &middot; Django + XGBoost</div>
+
+    <div class="controls">
+      <div class="field">
+        <label for="state">State</label>
+        <select id="state"><option>Loading…</option></select>
+      </div>
+      <div class="field">
+        <label for="date">Forecast date</label>
+        <input type="date" id="date" />
+      </div>
+      <button id="go">Get Forecast</button>
+    </div>
+
+    <div id="status"></div>
+
+    <div id="summary" class="cards hidden"></div>
+
+    <div class="chart-panel">
+      <div class="chart-box"><canvas id="chart"></canvas></div>
+    </div>
+  </div>
+
+  <script>
+    const API = "/api/power";
+    const stateSel = document.getElementById("state");
+    const dateInp = document.getElementById("date");
+    const goBtn = document.getElementById("go");
+    const statusEl = document.getElementById("status");
+    const summaryEl = document.getElementById("summary");
+    let chart = null;
+
+    function setStatus(msg, isError = false) {
+      statusEl.textContent = msg || "";
+      statusEl.classList.toggle("error", !!isError);
+    }
+
+    // ---- 1. Populate the state dropdown from the API ----
+    async function loadStates() {
+      try {
+        const res = await fetch(`${API}/states/in`);
+        if (!res.ok) throw new Error(`states/in -> HTTP ${res.status}`);
+        const states = await res.json();
+        states.sort((a, b) => a.name.localeCompare(b.name));
+        stateSel.innerHTML = "";
+        for (const s of states) {
+          const opt = document.createElement("option");
+          opt.value = s.code;
+          opt.textContent = `${s.name} (${s.code})`;
+          stateSel.appendChild(opt);
+        }
+        // Default to Chhattisgarh — the state with a trained model.
+        if ([...stateSel.options].some(o => o.value === "CHG")) stateSel.value = "CHG";
+      } catch (e) {
+        stateSel.innerHTML = `<option>Failed to load states</option>`;
+        setStatus(String(e), true);
+      }
+    }
+
+    // ---- 2. Fetch + render the 5-min forecast ----
+    async function getForecast() {
+      const code = stateSel.value;
+      const date = dateInp.value;
+      if (!code || !date) { setStatus("Pick a state and date.", true); return; }
+
+      goBtn.disabled = true;
+      setStatus("Fetching forecast…");
+      summaryEl.classList.add("hidden");
+
+      try {
+        const url = `${API}/forecast-5min?state_code=${encodeURIComponent(code)}&forecast_date=${encodeURIComponent(date)}`;
+        const res = await fetch(url);
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.detail || data.message || `HTTP ${res.status}`);
+        }
+        renderSummary(data);
+        renderChart(data);
+        setStatus(`Loaded ${data.points.length} points for ${data.state} on ${data.date}.`);
+      } catch (e) {
+        setStatus(`Error: ${e.message}`, true);
+        if (chart) { chart.destroy(); chart = null; }
+      } finally {
+        goBtn.disabled = false;
+      }
+    }
+
+    function card(k, v, unit = "") {
+      return `<div class="card"><div class="k">${k}</div><div class="v">${v}${unit ? ` <small>${unit}</small>` : ""}</div></div>`;
+    }
+
+    function renderSummary(d) {
+      const badges = [
+        d.season, d.weekday,
+        d.is_weekend ? "Weekend" : "Weekday",
+        d.is_holiday ? "Holiday" : null,
+      ].filter(Boolean).map(b => `<span class="badge">${b}</span>`).join("");
+
+      summaryEl.innerHTML =
+        card("State", d.state) +
+        card("Date", d.date) +
+        card("Average load", d.average_load_mw, "MW") +
+        card("Peak load", d.peak_load_mw, "MW") +
+        card("Energy/day", d.energy_consumption_mu_per_day, "MU") +
+        `<div class="card"><div class="k">Calendar</div><div class="badges">${badges}</div></div>`;
+      summaryEl.classList.remove("hidden");
+    }
+
+    function renderChart(d) {
+      const labels = d.points.map(p => p.datetime.slice(11, 16)); // HH:MM
+      const mw = d.points.map(p => p.mw);
+      const temp = d.points.map(p => p.temperature);
+
+      if (chart) chart.destroy();
+      chart = new Chart(document.getElementById("chart"), {
+        type: "line",
+        data: {
+          labels,
+          datasets: [
+            {
+              label: "Load (MW)", data: mw, yAxisID: "y",
+              borderColor: "#38bdf8", backgroundColor: "rgba(56,189,248,.12)",
+              borderWidth: 2, pointRadius: 0, tension: .25, fill: true,
+            },
+            {
+              label: "Temperature (°C)", data: temp, yAxisID: "y1",
+              borderColor: "#f59e0b", borderWidth: 1.5, borderDash: [4, 3],
+              pointRadius: 0, tension: .25, fill: false,
+            },
+          ],
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          interaction: { mode: "index", intersect: false },
+          plugins: {
+            legend: { labels: { color: "#e2e8f0" } },
+            tooltip: { callbacks: { title: (items) => `Time ${items[0].label}` } },
+          },
+          scales: {
+            x: {
+              ticks: { color: "#94a3b8", maxTicksLimit: 24, autoSkip: true },
+              grid: { color: "rgba(148,163,184,.08)" },
+            },
+            y: {
+              position: "left", title: { display: true, text: "MW", color: "#94a3b8" },
+              ticks: { color: "#94a3b8" }, grid: { color: "rgba(148,163,184,.12)" },
+            },
+            y1: {
+              position: "right", title: { display: true, text: "°C", color: "#94a3b8" },
+              ticks: { color: "#94a3b8" }, grid: { drawOnChartArea: false },
+            },
+          },
+        },
+      });
+    }
+
+    // ---- init ----
+    dateInp.value = "2026-07-03"; // matches the known-good example
+    goBtn.addEventListener("click", getForecast);
+    loadStates().then(() => getForecast()); // auto-load the default on first paint
+  </script>
+</body>
+</html>

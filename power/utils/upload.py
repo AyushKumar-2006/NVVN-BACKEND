@@ -372,6 +372,54 @@ def save_state_daily_load_from_csv(df):
 
 
 
+def save_state_5min_generic(df, cols=None):
+    """
+    Generic 5-minute state load format (CSV or XLSX):
+        DateTime (or Date + Time), State, Load_MW
+
+    State column may hold a short code (e.g. "CG") or full name
+    (e.g. "Chhattisgarh"); both are normalised. Multiple states in one
+    file are supported. Re-uploading the same range overwrites it.
+    """
+    if cols is None:
+        cols = {c.strip().lower(): c for c in df.columns}
+
+    state_col = cols["state"]
+    load_col = cols["load_mw"]
+
+    # ---- datetime (prefer explicit DateTime, else Date + Time) ----
+    if "datetime" in cols:
+        df["dtv"] = pd.to_datetime(df[cols["datetime"]], errors="coerce")
+    else:
+        df["dtv"] = pd.to_datetime(
+            df[cols["date"]].astype(str) + " " + df[cols["time"]].astype(str),
+            errors="coerce",
+        )
+
+    df["loadv"] = pd.to_numeric(df[load_col], errors="coerce")
+    df["sv"] = df[state_col].map(normalize_state)
+
+    df = df.dropna(subset=["dtv", "loadv", "sv"])
+    df = df.drop_duplicates(subset=["sv", "dtv"], keep="last")
+
+    if df.empty:
+        raise ValidationError("No valid 5-minute state data found")
+
+    # ---- idempotent overwrite: clear each state's datetime range ----
+    for state, g in df.groupby("sv"):
+        delete_state_5min_range(state, g["dtv"].min(), g["dtv"].max())
+
+    records = [
+        StateLoad5Min(state=s, datetime=d, load_mw=float(l))
+        for s, d, l in zip(df["sv"], df["dtv"], df["loadv"])
+    ]
+
+    StateLoad5Min.objects.bulk_create(records, batch_size=SQLITE_BATCH_SIZE)
+    return len(records)
+
+
+
+
 def save_state_5min_load_from_csv(df):
     required = ["DateTime", "Delhi", "BRPL", "BYPL", "NDPL", "NDMC", "MES"]
     missing = [c for c in required if c not in df.columns]
@@ -452,6 +500,15 @@ def save_power_data_from_xlsx(file) -> int:
 
     if df.empty:
         raise ValidationError("Uploaded file is empty")
+
+    # ---- generic 5-min state load: DateTime/Date+Time + State + Load_MW ----
+    cols = {c.strip().lower(): c for c in df.columns}
+    if (
+        "state" in cols
+        and "load_mw" in cols
+        and ("datetime" in cols or ("date" in cols and "time" in cols))
+    ):
+        return save_state_5min_generic(df, cols)
 
     if file_type == "CSV" and "DateTime" in df.columns:
         return save_state_5min_load_from_csv(df)
