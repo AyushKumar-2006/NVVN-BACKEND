@@ -437,7 +437,7 @@ def save_state_5min_load_from_csv(df):
     df = df.drop_duplicates(subset=["DateTime"], keep="last")
 
     # --------------------------------------------------
-    # 🔥 STATE DETECTION (NO HARDCODE, NO HELPER)
+    #  STATE DETECTION (NO HARDCODE, NO HELPER)
     # --------------------------------------------------
     non_datetime_cols = [c for c in df.columns if c != "DateTime"]
 
@@ -452,7 +452,7 @@ def save_state_5min_load_from_csv(df):
 
     # --------------------------------------------------
     # INSERT / UPSERT
-    # --------------------------------------------------
+    # -----------------
     records = []
     for _, row in df.iterrows():
         records.append(
@@ -478,13 +478,7 @@ def save_state_5min_load_from_csv(df):
 
 
 
-
-
-
-
-# =====================================================
 # MAIN UPLOAD ENTRY
-# =====================================================
 
 def save_power_data_from_xlsx(file) -> int:
     filename = file.name.lower()

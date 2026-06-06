@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
+import os
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -137,6 +138,13 @@ TASKS = {
     }
 }
 
+
+
+# MERIT live-data collection
+# When True, PowerConfig.ready() auto-starts an APScheduler job that polls MERIT
+# for CG demand every 5 minutes while the server runs (runserver child / gunicorn
+# only). Override per-process with the env var MERIT_SCHEDULER=0/1.
+MERIT_SCHEDULER_ENABLED = os.getenv("MERIT_SCHEDULER_ENABLED", "1") == "1"
 
 
 # CORS settings

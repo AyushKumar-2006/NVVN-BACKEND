@@ -100,7 +100,8 @@
       try {
         const res = await fetch(`${API}/states/in`);
         if (!res.ok) throw new Error(`states/in -> HTTP ${res.status}`);
-        const states = await res.json();
+        // Restrict the dropdown to Chhattisgarh (CHG) only — the state with a trained model.
+        const states = (await res.json()).filter(s => s.code === "CHG");
         states.sort((a, b) => a.name.localeCompare(b.name));
         stateSel.innerHTML = "";
         for (const s of states) {

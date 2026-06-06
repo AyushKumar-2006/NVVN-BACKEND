@@ -19,8 +19,12 @@ from ninja.errors import HttpError
 from power.ml.model_store import load_model
 from power.ml.pridiction.predict_state_5min import predict_state_5min_data
 from power.ml.trainy.common import merge_live_weather
+from power.ml.weather import fetch_weather_range
 from power.models import StateLoad5Min, Weather
+from power.utils.logger import get_logger
 from power.utils.metadata import STATE_CODE_TO_NAME, add_calendar_features
+
+logger = get_logger("ForecastCompare")
 
 DISCOMS = ["brpl", "bypl", "ndpl", "ndmc", "mes"]
 
@@ -180,6 +184,39 @@ def _bulk_weather_by_date(state: str, days: list) -> dict:
     return out
 
 
+def _bulk_live_weather_by_date(state: str, days: list) -> dict:
+    """One live open-meteo *range* fetch -> {date: weather_df} for `days`.
+
+    Backfills days the Weather table doesn't have. Fetching the whole [min..max]
+    span in a single call (and letting power.ml.weather cache it) replaces the
+    old per-day live fetch inside `_predict_one` — for CG that per-day path was a
+    4-district fan-out *for every day*, i.e. the N+1 that made the accuracy
+    endpoint slow.
+    """
+    if not days:
+        return {}
+    try:
+        wdf = fetch_weather_range(state, min(days), max(days), "hourly")
+    except Exception as e:  # noqa: BLE001 — never let a weather hiccup 500 the report
+        logger.warning(f"[{state}] bulk live weather backfill failed: {e}")
+        return {}
+    if wdf is None or wdf.empty:
+        return {}
+
+    wanted = set(days)
+    keep = ["datetime", "temperature_c", "humidity_pct", "rain_mm", "wind_speed_ms"]
+    wdf = wdf.copy()
+    wdf["datetime"] = pd.to_datetime(wdf["datetime"])
+    wdf["d"] = wdf["datetime"].dt.date
+    keep = [c for c in keep if c in wdf.columns]
+
+    out = {}
+    for d, g in wdf.groupby("d"):
+        if d in wanted:
+            out[d] = g[keep].reset_index(drop=True)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # endpoint builders
 # ---------------------------------------------------------------------------
@@ -270,6 +307,14 @@ def build_forecast_accuracy(state: str, days: int = 30) -> dict:
 
         model = load_model(f"state_5min_{state}.pkl")
         weather_by_date = _bulk_weather_by_date(state, target_dates)
+
+        # Backfill any days missing from the Weather table in ONE bulk live fetch
+        # instead of letting _predict_one fetch each day individually (the N+1
+        # that made this endpoint slow). weather.py caches the result, so repeat
+        # calls don't hit open-meteo at all.
+        missing_days = [d for d in target_dates if d not in weather_by_date]
+        if missing_days:
+            weather_by_date.update(_bulk_live_weather_by_date(state, missing_days))
 
         # bulk actual 5-min for the whole window (one query)
         actual_all = pd.DataFrame(

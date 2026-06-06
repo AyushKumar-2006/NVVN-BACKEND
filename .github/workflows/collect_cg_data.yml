@@ -1,0 +1,62 @@
+name: Collect CG MERIT data
+
+# Backup collector that runs in GitHub's cloud even when the laptop is off.
+# Fetches Chhattisgarh live demand from MERIT and commits it to
+# data/cg_live_data.csv on main.
+#
+# NOTE: GitHub's scheduled cron is best-effort — */5 is the *minimum* spacing and
+# runs are frequently delayed or coalesced under load, so expect roughly (not
+# exactly) one row every 5 minutes. For guaranteed 5-min cadence run the Django
+# poller (start_data_collection) on an always-on host; this workflow is the
+# off-hours backup.
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:        # allow manual runs from the Actions tab
+
+# Don't let two scheduled runs push at the same time (avoids push races).
+concurrency:
+  group: collect-cg-data
+  cancel-in-progress: false
+
+permissions:
+  contents: write           # needed to commit + push the CSV
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Fetch CG demand from MERIT
+        run: python scripts/collect_merit_data.py --csv data/cg_live_data.csv
+
+      - name: Commit & push if changed
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/cg_live_data.csv
+          if git diff --staged --quiet; then
+            echo "No new data to commit."
+            exit 0
+          fi
+          git commit -m "data: CG MERIT reading $(date -u +'%Y-%m-%dT%H:%MZ')"
+          # rebase on any rows another run pushed meanwhile, then push (retry once)
+          for attempt in 1 2 3; do
+            git pull --rebase --autostash origin main && git push && break
+            echo "push attempt $attempt failed; retrying…"
+            sleep 5
+          done

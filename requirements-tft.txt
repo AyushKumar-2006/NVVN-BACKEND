@@ -1,0 +1,10 @@
+# Extra dependencies for the Temporal Fusion Transformer (TFT) 5-min model.
+# Installed in addition to requirements.txt. Pinned to the versions verified to
+# work with the existing torch 2.11 / pandas 3.0 / scikit-learn 1.9 environment
+# (no downgrades of existing packages).
+pytorch-forecasting==1.7.0
+pytorch-lightning==2.6.5
+# pulled in transitively, pinned for reproducibility:
+torchmetrics==1.9.0
+lightning-utilities==0.15.3
+scikit-base==0.13.2

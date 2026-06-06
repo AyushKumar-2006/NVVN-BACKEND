@@ -47,6 +47,7 @@ Usage
 """
 
 import argparse
+import json
 import os
 import sys
 from datetime import date, datetime, timedelta
@@ -71,10 +72,28 @@ from power.utils.upload import save_state_5min_generic  # noqa: E402
 # --------------------------------------------------------------------------
 STATE_CODE = "CG"
 
-# Best-effort WRLDC real-time/data endpoint. NOT publicly documented — VERIFY.
-# Prefer --csv/--xlsx mode until this is confirmed against the live dashboard.
-WRLDC_ENDPOINT = "https://www.wrldc.in/OnlineDataDisplay/GetRealTimeData_state_Wise"
-HEADERS = {"User-Agent": "Mozilla/5.0 (ingestion script; +local)", "Accept": "application/json"}
+# Verified WRLDC real-time endpoint (the one its own chart.html / data dashboard
+# calls). It is an ASP.NET PageMethod: POST a JSON body, the result is wrapped in
+# a top-level {"d": "<json-string>"}.
+#   - request body : {date:"YYYY-M-D"}   (month/day are NOT zero-padded)
+#   - state name   : WRLDC spells Chhattisgarh "Chattishgarh"
+#   - load value   : the "Demand" field (state demand met, MW)
+#   - timestamp    : "current_datetime", in %Y-%d-%m %H:%M:%S (year-DAY-month!)
+# NOTE: this is a *real-time* feed — it serves the current day's accumulating
+# 15-min blocks, not historical days. For history, export from the dashboard and
+# use --csv/--xlsx. The GetAllScheduleDates method reports which date is live.
+WRLDC_ENDPOINT = "https://wrldc.in/OnlinestateTest1.aspx/GetRealTimeData_state_Wise"
+WRLDC_DATES_ENDPOINT = "https://wrldc.in/OnlinestateTest1.aspx/GetAllScheduleDates"
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (ingestion script; +local)",
+    "Content-Type": "application/json; charset=utf-8",
+    "X-Requested-With": "XMLHttpRequest",
+}
+
+# WRLDC's spelling(s) of Chhattisgarh and the field we treat as the load.
+CG_NAME_MATCH = "chat"          # matches "Chattishgarh" (and "Chhattisgarh")
+LOAD_FIELD = "Demand"            # state demand met (MW)
+WRLDC_DT_FMT = "%Y-%d-%m %H:%M:%S"   # e.g. "2025-10-05 03:15:05" -> 10 May 2025
 
 # Column-name candidates when reading a downloaded export
 DATETIME_CANDIDATES = ["datetime", "date_time", "timestamp", "time", "date", "block_time"]
@@ -128,41 +147,82 @@ def load_local(path: str, dt_col=None, load_col=None) -> pd.DataFrame:
 # --------------------------------------------------------------------------
 # Source B: live WRLDC endpoint (best-effort; verify before relying on it)
 # --------------------------------------------------------------------------
+def _unwrap_aspnet(resp_json):
+    """ASP.NET PageMethods return {"d": <payload-or-json-string>}."""
+    inner = resp_json.get("d", resp_json) if isinstance(resp_json, dict) else resp_json
+    if isinstance(inner, str):
+        inner = json.loads(inner)
+    return inner
+
+
 def parse_wrldc_payload(payload, target_date: date) -> pd.DataFrame:
     """
-    Map a WRLDC JSON payload to [datetime, load_mw] for Chhattisgarh.
-    Adjust the field names here to match the live response.
+    Map a WRLDC state-wise payload to [datetime, load_mw] for Chhattisgarh.
+
+    Each item looks like:
+        {"StateName": "Chattishgarh", "Demand": "3421.0",
+         "current_datetime": "2025-10-05 03:15:05", ...}
+    Zero / non-positive demand rows are dropped (the feed pads missing blocks
+    with 0.0, which would otherwise poison the load series).
     """
-    rows = payload if isinstance(payload, list) else payload.get("data", payload)
+    rows = payload if isinstance(payload, list) else (payload or {}).get("data", [])
     out = []
     for item in rows or []:
         if not isinstance(item, dict):
             continue
-        state = str(item.get("StateName") or item.get("state") or "").lower()
-        if "chhat" not in state and state not in ("cg",):
+        if CG_NAME_MATCH not in str(item.get("StateName", "")).lower():
             continue
-        # common WRLDC fields: time block + Actual drawal
-        t = item.get("time") or item.get("Time") or item.get("block_time")
-        v = item.get("Actual") or item.get("actual") or item.get("Load") or item.get("value")
+        t = item.get("current_datetime")
+        v = item.get(LOAD_FIELD)
         if t is None or v is None:
             continue
         try:
-            ts = pd.to_datetime(t)
-        except Exception:  # noqa: BLE001
+            ts = datetime.strptime(str(t), WRLDC_DT_FMT)
+            load = float(v)
+        except (ValueError, TypeError):
             continue
-        out.append({"datetime": ts, "load_mw": float(v)})
+        if load <= 0:          # skip padded / not-yet-reported blocks
+            continue
+        out.append({"datetime": ts, "load_mw": load})
     return pd.DataFrame(out)
 
 
-def fetch_live(target_date: date) -> pd.DataFrame:
-    body = {"date": target_date.strftime("%Y-%m-%d")}
+def _wrldc_date_str(d: date) -> str:
+    """WRLDC wants a non-zero-padded date: '2025-5-1', not '2025-05-01'."""
+    return f"{d.year}-{d.month}-{d.day}"
+
+
+def get_available_dates() -> list[date]:
+    """Dates the live feed currently has data for (usually just the live day)."""
     try:
-        r = requests.post(WRLDC_ENDPOINT, json=body, headers=HEADERS, timeout=30, verify=False)
+        r = requests.post(WRLDC_DATES_ENDPOINT, data='{flag:"1"}',
+                          headers=HEADERS, timeout=30, verify=False)
         r.raise_for_status()
-        return parse_wrldc_payload(r.json(), target_date)
+        raw = _unwrap_aspnet(r.json()) or []
+        out = []
+        for s in raw:
+            for fmt in ("%m/%d/%Y", "%Y-%d-%m %H:%M:%S", "%Y-%m-%d"):
+                try:
+                    out.append(datetime.strptime(str(s), fmt).date())
+                    break
+                except ValueError:
+                    continue
+        return sorted(set(out))
+    except Exception as e:  # noqa: BLE001
+        print(f"  !! could not list WRLDC dates: {e}")
+        return []
+
+
+def fetch_live(target_date: date) -> pd.DataFrame:
+    body = '{date:"' + _wrldc_date_str(target_date) + '"}'
+    try:
+        r = requests.post(WRLDC_ENDPOINT, data=body, headers=HEADERS,
+                          timeout=40, verify=False)
+        r.raise_for_status()
+        return parse_wrldc_payload(_unwrap_aspnet(r.json()), target_date)
     except Exception as e:  # noqa: BLE001
         print(f"  !! WRLDC fetch failed for {target_date}: {e}")
-        print(f"     verify WRLDC_ENDPOINT/parse_wrldc_payload, or use --csv/--xlsx")
+        print(f"     the feed may be down — export from the dashboard and use --csv/--xlsx")
         return pd.DataFrame()
 
 
@@ -217,6 +277,9 @@ def main():
     ap.add_argument("--load-col", help="CG load column name in the export")
     ap.add_argument("--from", dest="dfrom", help="live fetch range start YYYY-MM-DD")
     ap.add_argument("--to", dest="dto", help="live fetch range end YYYY-MM-DD")
+    ap.add_argument("--latest", action="store_true",
+                    help="fetch whatever date the live feed currently has (default "
+                         "if no other source is given)")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
@@ -231,7 +294,15 @@ def main():
             cur += timedelta(days=1)
         raw15 = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
     else:
-        ap.error("provide --csv/--xlsx, or --from/--to")
+        # default / --latest: pull the live feed's current date(s)
+        avail = get_available_dates()
+        if not avail:
+            print("Live feed reports no available dates. Export from the dashboard "
+                  "and re-run with --csv/--xlsx.")
+            return
+        print(f"Live feed available date(s): {[d.isoformat() for d in avail]}")
+        frames = [fetch_live(d) for d in avail]
+        raw15 = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
     if raw15.empty:
         print("No 15-min data obtained — nothing to do.")

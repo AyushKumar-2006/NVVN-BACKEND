@@ -1,10 +1,90 @@
 from datetime import date, datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor
+import threading
 import time
 import pandas as pd
 import requests
 from power.utils.logger import get_logger
 
 logger = get_logger("WeatherFetch")
+
+
+# ---------------------------------------------------------------------------
+# Weather response cache
+#
+# Every open-meteo call here is keyed by a *fixed* (state, date-range, endpoint)
+# tuple, so the result for a given key is stable for the life of the process.
+# Without this, the accuracy / forecast endpoints re-fetch the same days from
+# open-meteo on every single request (and for CG that's a 4-district fan-out per
+# day), which is what made `/api/power/forecast-accuracy` slow.
+#
+# The cache is a process-local, thread-safe TTL dict. Past (archive) weather is
+# immutable so any TTL is safe; today/forecast can shift, so we keep a moderate
+# TTL and refresh after it expires. Only successful (non-empty) results are
+# cached, so a transient network failure is retried rather than stuck.
+# ---------------------------------------------------------------------------
+WEATHER_CACHE_TTL_SECONDS = 6 * 3600  # 6h: long enough to serve repeat calls, short enough to refresh the live forecast
+
+_weather_cache: dict = {}
+_weather_cache_lock = threading.Lock()
+
+
+def _cache_get(key):
+    with _weather_cache_lock:
+        item = _weather_cache.get(key)
+        if item is None:
+            return None
+        ts, value = item
+        if time.time() - ts > WEATHER_CACHE_TTL_SECONDS:
+            _weather_cache.pop(key, None)
+            return None
+        return value
+
+
+def _cache_set(key, value):
+    with _weather_cache_lock:
+        _weather_cache[key] = (time.time(), value)
+
+
+def _result_is_usable(value):
+    """A result worth caching: a non-empty frame / a dict with any real value."""
+    if isinstance(value, pd.DataFrame):
+        return not value.empty
+    if isinstance(value, dict):
+        return any(v is not None for v in value.values())
+    return value is not None
+
+
+def _copy_result(value):
+    """Hand back a defensive copy so callers can mutate freely (several do,
+    e.g. the climatology proxy shifts the datetime column in place)."""
+    if isinstance(value, pd.DataFrame):
+        return value.copy()
+    if isinstance(value, dict):
+        return dict(value)
+    return value
+
+
+def _cached_call(key, producer):
+    """Return the cached value for ``key`` or compute it via ``producer()``.
+
+    Successful results are stored and every hand-off (store + return) is a copy,
+    so the cached object is never mutated by a caller.
+    """
+    cached = _cache_get(key)
+    if cached is not None:
+        return _copy_result(cached)
+
+    value = producer()
+    if _result_is_usable(value):
+        _cache_set(key, _copy_result(value))
+    return value
+
+
+def clear_weather_cache():
+    """Drop every cached weather response (used by tests / manual refresh)."""
+    with _weather_cache_lock:
+        _weather_cache.clear()
 
 
 
@@ -44,6 +124,105 @@ STATE_COORDS = {
     "UK": {"lat": 30.0668, "lon": 79.0193},
     "WB": {"lat": 22.9868, "lon": 87.8550},
 }
+
+
+#-------------------------------------
+# Chhattisgarh district network.
+#
+# For CG, weather is NOT taken from the single STATE_COORDS["CG"] point. Instead
+# we fetch the districts below concurrently and blend them into a single
+# POPULATION-WEIGHTED average. This applies to every CG weather path that flows
+# through the three low-level fetchers below (live/archive hourly, daily
+# forecast, archive-proxy climatology, and the Climate-API normal), so live
+# forecast and the Climate API both get the district-weighted value.
+#
+# The set is currently the 4 highest-load districts (weights sum to 1.0). The
+# weighted average normalises by the weights of the districts that actually
+# returned data, so it stays correct even if a district request fails, and the
+# list can be grown/shrunk freely without touching the blending code below.
+# Temperature is the primary target, but humidity/wind/rain are blended with the
+# same weights to keep the CG record internally consistent.
+# ---------------------------------------------------------------------------
+CG_DISTRICTS = [
+    {"name": "Raipur",   "lat": 21.2514, "lon": 81.6296, "weight": 0.40},  # Capital, max load
+    {"name": "Bilaspur", "lat": 22.0796, "lon": 82.1391, "weight": 0.25},  # Industrial north
+    {"name": "Korba",    "lat": 22.3595, "lon": 82.7501, "weight": 0.20},  # Power plant area
+    {"name": "Jagdalpur","lat": 19.0748, "lon": 82.0388, "weight": 0.15},  # South CG, cooler temp
+]
+# Max concurrent district requests (thread pool over the blocking open-meteo
+# `requests` calls — i.e. the districts are fetched in parallel, not serially).
+# Kept modest so the fan-out doesn't trip open-meteo's burst rate limit (the
+# Climate API is the strictest); the weighted average tolerates any district that
+# still gets throttled by normalising over the weights that succeeded.
+_DISTRICT_WORKERS = 8
+
+
+def _parallel_districts(fetch_one):
+    """Run ``fetch_one(district)`` for every CG district concurrently.
+
+    Returns ``[(result, weight), ...]`` keeping only districts that returned a
+    usable result (empty DataFrame / empty dict / None / errors are dropped).
+    """
+    out = []
+    with ThreadPoolExecutor(max_workers=min(_DISTRICT_WORKERS, len(CG_DISTRICTS))) as ex:
+        futures = {ex.submit(fetch_one, d): d for d in CG_DISTRICTS}
+        for fut, dist in futures.items():
+            try:
+                res = fut.result()
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"[CG/{dist['name']}] district fetch failed: {e}")
+                continue
+            if res is None:
+                continue
+            if isinstance(res, pd.DataFrame) and res.empty:
+                continue
+            if isinstance(res, dict) and not any(v is not None for v in res.values()):
+                continue
+            out.append((res, dist["weight"]))
+    return out
+
+
+def _weighted_average_df(frames_weights, key, value_cols):
+    """Population-weighted average of ``value_cols`` across district frames.
+
+    Frames are aligned on ``key`` (datetime or date); each row is normalised by
+    the weights of the districts that have a (non-NaN) value at that key, so a
+    missing district never biases the blend.
+    """
+    idx = sorted(set().union(*[set(df[key]) for df, _ in frames_weights]))
+    num = {c: pd.Series(0.0, index=idx) for c in value_cols}
+    den = {c: pd.Series(0.0, index=idx) for c in value_cols}
+
+    for df, w in frames_weights:
+        d = df.drop_duplicates(subset=[key]).set_index(key)
+        for c in value_cols:
+            s = pd.to_numeric(d[c], errors="coerce").reindex(idx)
+            present = pd.Series(w, index=idx).where(s.notna(), 0.0)
+            num[c] = num[c] + (w * s).fillna(0.0)
+            den[c] = den[c] + present
+
+    out = pd.DataFrame(index=pd.Index(idx, name=key))
+    for c in value_cols:
+        out[c] = num[c] / den[c].replace(0.0, pd.NA)
+    return out.reset_index()
+
+
+def _weighted_average_dict(dicts_weights, keys):
+    """Population-weighted average of per-district ``{key: value}`` dicts.
+
+    Normalised per key by the weights of districts with a non-None value.
+    """
+    out = {}
+    for k in keys:
+        num = den = 0.0
+        for dct, w in dicts_weights:
+            v = dct.get(k)
+            if v is None:
+                continue
+            num += w * float(v)
+            den += w
+        out[k] = round(num / den, 2) if den > 0 else None
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -115,6 +294,45 @@ def _to_date(value):
 
 
 def _request_open_meteo(coords, start_str, end_str, url, state_short, frequency):
+    """Range hourly weather -> 5-min df (cached per state/range/endpoint).
+
+    For CG this fans out across every district (in parallel) and returns the
+    population-weighted average; every other state is a single point request.
+    """
+    key = ("hourly", state_short, start_str, end_str, url, frequency)
+    return _cached_call(
+        key,
+        lambda: _request_open_meteo_uncached(
+            coords, start_str, end_str, url, state_short, frequency
+        ),
+    )
+
+
+def _request_open_meteo_uncached(coords, start_str, end_str, url, state_short, frequency):
+    if state_short == "CG":
+        frames = _parallel_districts(
+            lambda d: _request_open_meteo_single(
+                d, start_str, end_str, url, f"CG/{d['name']}", frequency
+            )
+        )
+        if not frames:
+            return pd.DataFrame()
+        out = _weighted_average_df(
+            frames, "datetime",
+            ["temperature_c", "humidity_pct", "wind_speed_ms", "rain_mm"],
+        )
+        out["state"] = "CG"
+        out["frequency"] = frequency
+        logger.info(
+            f"[CG] population-weighted hourly weather from "
+            f"{len(frames)}/{len(CG_DISTRICTS)} districts {start_str}..{end_str}"
+        )
+        return out
+
+    return _request_open_meteo_single(coords, start_str, end_str, url, state_short, frequency)
+
+
+def _request_open_meteo_single(coords, start_str, end_str, url, label, frequency):
     """Single open-meteo request for a whole [start, end] range -> 5-min df."""
     params = {
         "latitude": round(coords["lat"], 4),
@@ -131,12 +349,12 @@ def _request_open_meteo(coords, start_str, end_str, url, state_short, frequency)
             r = requests.get(url, params=params, timeout=30)
             r.raise_for_status()
             data = r.json()
-            logger.info(f"[{state_short}] weather fetched {start_str}..{end_str}")
+            logger.info(f"[{label}] weather fetched {start_str}..{end_str}")
             break
         except Exception as e:
             if attempt == 2:
                 logger.error(
-                    f"[{state_short}] Weather fetch failed {start_str}..{end_str}: {e}"
+                    f"[{label}] Weather fetch failed {start_str}..{end_str}: {e}"
                 )
                 return pd.DataFrame()
             time.sleep(2)
@@ -167,7 +385,7 @@ def _request_open_meteo(coords, start_str, end_str, url, state_short, frequency)
         .reset_index()
     )
 
-    df["state"] = state_short
+    df["state"] = label
     df["frequency"] = frequency
     return df
 
@@ -270,6 +488,36 @@ FORECAST_HORIZON_DAYS = 15
 
 
 def _request_daily(coords, start_dt, end_dt, url, state_short):
+    """Daily mean/max temperature DataFrame (cached per state/range/endpoint).
+
+    For CG this is the population-weighted blend of every district (fetched in
+    parallel); every other state is a single point request.
+    """
+    key = ("daily", state_short, start_dt.isoformat(), end_dt.isoformat(), url)
+    return _cached_call(
+        key,
+        lambda: _request_daily_uncached(coords, start_dt, end_dt, url, state_short),
+    )
+
+
+def _request_daily_uncached(coords, start_dt, end_dt, url, state_short):
+    if state_short == "CG":
+        frames = _parallel_districts(
+            lambda d: _request_daily_single(d, start_dt, end_dt, url, f"CG/{d['name']}")
+        )
+        if not frames:
+            return pd.DataFrame()
+        out = _weighted_average_df(frames, "date", ["temp", "temp_max"])
+        logger.info(
+            f"[CG] population-weighted daily weather from "
+            f"{len(frames)}/{len(CG_DISTRICTS)} districts {start_dt}..{end_dt}"
+        )
+        return out
+
+    return _request_daily_single(coords, start_dt, end_dt, url, state_short)
+
+
+def _request_daily_single(coords, start_dt, end_dt, url, label):
     """Single open-meteo request -> daily mean/max temperature DataFrame."""
     params = {
         "latitude": round(coords["lat"], 4),
@@ -290,7 +538,7 @@ def _request_daily(coords, start_dt, end_dt, url, state_short):
         except Exception as e:
             if attempt == 2:
                 logger.error(
-                    f"[{state_short}] Daily weather failed {start_dt}..{end_dt}: {e}"
+                    f"[{label}] Daily weather failed {start_dt}..{end_dt}: {e}"
                 )
                 return pd.DataFrame()
             time.sleep(2)
@@ -356,12 +604,40 @@ CLIMATE_MODEL = "MRI_AGCM3_2_S"  # ~20 km high-res model, good coverage over Ind
 def _climate_normal_daily(coords, target_dates, state_short, years=CLIMATE_NORMAL_YEARS):
     """
     `years`-year temperature normal for the given calendar days via the
-    Open-Meteo Climate API.
+    Open-Meteo Climate API (cached per state / day-set / horizon).
 
-    Pulls daily mean temperature for the continuous calendar window spanning the
-    target days across the past `years` years (one request), then averages each
-    (month, day) over those years. Returns {date: temp_or_None}.
+    For CG this is the population-weighted blend of every district (fetched in
+    parallel); every other state is a single point request. Returns
+    {date: temp_or_None}.
     """
+    key = ("climate", state_short, tuple(sorted(target_dates)), years)
+    return _cached_call(
+        key,
+        lambda: _climate_normal_daily_uncached(coords, target_dates, state_short, years),
+    )
+
+
+def _climate_normal_daily_uncached(coords, target_dates, state_short, years=CLIMATE_NORMAL_YEARS):
+    if state_short == "CG":
+        dicts = _parallel_districts(
+            lambda d: _climate_normal_daily_single(d, target_dates, f"CG/{d['name']}", years)
+        )
+        if not dicts:
+            return {d: None for d in target_dates}
+        out = _weighted_average_dict(dicts, target_dates)
+        filled = sum(1 for v in out.values() if v is not None)
+        logger.info(
+            f"[CG] population-weighted Climate-API {years}-yr normal from "
+            f"{len(dicts)}/{len(CG_DISTRICTS)} districts filled "
+            f"{filled}/{len(target_dates)} day(s)"
+        )
+        return out
+
+    return _climate_normal_daily_single(coords, target_dates, state_short, years)
+
+
+def _climate_normal_daily_single(coords, target_dates, label, years=CLIMATE_NORMAL_YEARS):
+    """Single-point Climate-API normal. Returns {date: temp_or_None}."""
     end_year = datetime.now().year - 1
     start_year = end_year - (years - 1)
     md_start, md_end = min(target_dates), max(target_dates)
@@ -395,7 +671,7 @@ def _climate_normal_daily(coords, target_dates, state_short, years=CLIMATE_NORMA
         except Exception as e:
             if attempt == 2:
                 logger.error(
-                    f"[{state_short}] Climate-API normal failed "
+                    f"[{label}] Climate-API normal failed "
                     f"{range_start}..{range_end}: {e}"
                 )
                 return {d: None for d in target_dates}
@@ -408,7 +684,7 @@ def _climate_normal_daily(coords, target_dates, state_short, years=CLIMATE_NORMA
     temp_key = next((k for k in daily if k.startswith("temperature_2m_mean")), None)
     temps_arr = daily.get(temp_key) if temp_key else None
     if not times or not temps_arr:
-        logger.warning(f"[{state_short}] Climate-API returned no data {range_start}..{range_end}")
+        logger.warning(f"[{label}] Climate-API returned no data {range_start}..{range_end}")
         return {d: None for d in target_dates}
 
     by_md = {}  # (month, day) -> [temps]
@@ -425,7 +701,7 @@ def _climate_normal_daily(coords, target_dates, state_short, years=CLIMATE_NORMA
 
     filled = sum(1 for v in out.values() if v is not None)
     logger.info(
-        f"[{state_short}] Climate-API {years}-yr normal "
+        f"[{label}] Climate-API {years}-yr normal "
         f"({start_year}-{end_year}) filled {filled}/{len(target_dates)} day(s)"
     )
     return out

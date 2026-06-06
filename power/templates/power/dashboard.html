@@ -7,10 +7,11 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
   <style>
     :root {
-      --bg: #0f172a; --panel: #1e293b; --panel-2: #273449;
-      --text: #e2e8f0; --muted: #94a3b8; --accent: #38bdf8;
-      --accent-2: #f59e0b; --border: #334155; --danger: #f87171;
-      --green: #34d399; --amber: #fbbf24; --red: #f87171;
+      --bg: #ffffff; --panel: #ffffff; --panel-2: #f1f5f9;
+      --text: #1e293b; --muted: #64748b; --accent: #0284c7;
+      --accent-2: #d97706; --border: #e2e8f0; --danger: #dc2626;
+      --green: #059669; --amber: #d97706; --red: #dc2626;
+      --shadow: 0 1px 3px rgba(15, 23, 42, .06), 0 1px 2px rgba(15, 23, 42, .04);
     }
     * { box-sizing: border-box; }
     body {
@@ -24,7 +25,7 @@
     .controls {
       display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end;
       background: var(--panel); border: 1px solid var(--border);
-      border-radius: 12px; padding: 16px 18px; margin-bottom: 18px;
+      border-radius: 12px; padding: 16px 18px; margin-bottom: 18px; box-shadow: var(--shadow);
     }
     .field { display: flex; flex-direction: column; gap: 6px; }
     .field label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
@@ -34,21 +35,21 @@
     }
     select:focus, input:focus { border-color: var(--accent); }
     button {
-      background: var(--accent); color: #06283a; border: none; border-radius: 8px;
+      background: var(--accent); color: #ffffff; border: none; border-radius: 8px;
       padding: 10px 20px; font-size: 14px; font-weight: 600; cursor: pointer; transition: opacity .15s;
     }
     button:hover { opacity: .9; }
     button:disabled { opacity: .5; cursor: not-allowed; }
     .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 18px; }
     .card {
-      background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px;
+      background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; box-shadow: var(--shadow);
     }
     .card .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
     .card .v { font-size: 20px; font-weight: 600; margin-top: 4px; }
     .card .v small { font-size: 12px; color: var(--muted); font-weight: 400; }
     .panel {
       background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
-      padding: 18px; margin-bottom: 18px;
+      padding: 18px; margin-bottom: 18px; box-shadow: var(--shadow);
     }
     .chart-box { position: relative; height: 360px; }
     .status { font-size: 13px; color: var(--muted); margin: 0 0 12px; min-height: 18px; }
@@ -67,6 +68,9 @@
     .risk.HIGH { background: rgba(251,191,36,.15); color: var(--amber); border: 1px solid rgba(251,191,36,.4); }
     .risk.CRITICAL { background: rgba(248,113,113,.18); color: var(--red); border: 1px solid rgba(248,113,113,.45); }
     .weekend td { color: var(--muted); }
+    .wsrc { font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 999px; display: inline-block; border: 1px solid var(--border); background: var(--panel-2); color: var(--muted); }
+    .wsrc.real { background: rgba(2,132,199,.12); color: var(--accent); border-color: rgba(2,132,199,.35); }
+    .wsrc.est { background: rgba(217,119,6,.12); color: var(--amber); border-color: rgba(217,119,6,.35); }
     .risk-summary { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
     .pill { font-size: 12px; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--border); }
     .pill b { font-size: 15px; }
@@ -74,8 +78,7 @@
 </head>
 <body>
   <div class="wrap">
-    <h1>⚡ Power Forecast Dashboard</h1>
-    <div class="sub">5-min &amp; 30-day load forecasts with risk levels, temperature, and predicted-vs-actual accuracy &middot; Django + ML</div>
+    <h1>Power Forecast Dashboard</h1>
 
     <div class="controls">
       <div class="field">
@@ -153,7 +156,8 @@
       try {
         const res = await fetch(`${API}/states/in`);
         if (!res.ok) throw new Error(`states/in -> HTTP ${res.status}`);
-        const states = await res.json();
+        // Restrict the dropdown to Chhattisgarh (CHG) only — the state with a trained model.
+        const states = (await res.json()).filter(s => s.code === "CHG");
         states.sort((a, b) => a.name.localeCompare(b.name));
         stateSel.innerHTML = "";
         for (const s of states) {
@@ -207,12 +211,12 @@
           options: {
             responsive: true, maintainAspectRatio: false,
             interaction: { mode: "index", intersect: false },
-            plugins: { legend: { labels: { color: "#e2e8f0" } },
+            plugins: { legend: { labels: { color: "#1e293b" } },
               tooltip: { callbacks: { title: items => `Time ${items[0].label}` } } },
             scales: {
-              x: { ticks: { color: "#94a3b8", maxTicksLimit: 24, autoSkip: true }, grid: { color: "rgba(148,163,184,.08)" } },
-              y: { position: "left", title: { display: true, text: "MW", color: "#94a3b8" }, ticks: { color: "#94a3b8" }, grid: { color: "rgba(148,163,184,.12)" } },
-              y1: { position: "right", title: { display: true, text: "°C", color: "#94a3b8" }, ticks: { color: "#94a3b8" }, grid: { drawOnChartArea: false } },
+              x: { ticks: { color: "#64748b", maxTicksLimit: 24, autoSkip: true }, grid: { color: "rgba(100,116,139,.12)" } },
+              y: { position: "left", title: { display: true, text: "MW", color: "#64748b" }, ticks: { color: "#64748b" }, grid: { color: "rgba(100,116,139,.16)" } },
+              y1: { position: "right", title: { display: true, text: "°C", color: "#64748b" }, ticks: { color: "#64748b" }, grid: { drawOnChartArea: false } },
             },
           },
         });
@@ -265,10 +269,10 @@
           options: {
             responsive: true, maintainAspectRatio: false,
             interaction: { mode: "index", intersect: false },
-            plugins: { legend: { labels: { color: "#e2e8f0" } } },
+            plugins: { legend: { labels: { color: "#1e293b" } } },
             scales: {
-              x: { ticks: { color: "#94a3b8", maxTicksLimit: 15, autoSkip: true }, grid: { color: "rgba(148,163,184,.08)" } },
-              y: { title: { display: true, text: "MW", color: "#94a3b8" }, ticks: { color: "#94a3b8" }, grid: { color: "rgba(148,163,184,.12)" } },
+              x: { ticks: { color: "#64748b", maxTicksLimit: 15, autoSkip: true }, grid: { color: "rgba(100,116,139,.12)" } },
+              y: { title: { display: true, text: "MW", color: "#64748b" }, ticks: { color: "#64748b" }, grid: { color: "rgba(100,116,139,.16)" } },
             },
           },
         });
@@ -284,6 +288,13 @@
       if (level === "CRITICAL") return "CRITICAL";
       if (level === "HIGH RISK") return "HIGH";
       return "NORMAL";
+    }
+
+    // Real measured/forecast weather vs estimated climatology, for the badge color.
+    function weatherSrcBadge(src) {
+      if (!src) return `<span class="wsrc">—</span>`;
+      const real = src === "forecast" || src === "archive";
+      return `<span class="wsrc ${real ? "real" : "est"}">${src}</span>`;
     }
 
     async function load30Day(code, fromDate) {
@@ -316,7 +327,7 @@
             `<td class="num">${day.peak_pct_of_historical}%</td>` +
             `<td><span class="risk ${riskClass(day.risk_level)}">${day.risk_level}</span></td>` +
             `<td class="num">${day.temperature_c ?? "—"}</td>` +
-            `<td>${day.weather_source ?? "—"}</td>`;
+            `<td>${weatherSrcBadge(day.weather_source)}</td>`;
           tbody.appendChild(tr);
         }
         setStatus("status30", `Loaded ${(d.days || []).length} days for ${d.state} (${d.from_date} → ${d.to_date}).`);
