@@ -1,4 +1,4 @@
-name: Collect CG MERIT data
+name: Collect CG data (MERIT live + ICED load curve)
 
 # Backup collector that runs in GitHub's cloud even when the laptop is off.
 # Fetches Chhattisgarh live demand from MERIT and commits it to
@@ -12,8 +12,9 @@ name: Collect CG MERIT data
 
 on:
   schedule:
-    - cron: '*/5 * * * *'
-  workflow_dispatch:        # allow manual runs from the Actions tab
+    - cron: '*/5 * * * *'   # MERIT live snapshot (collect job)
+    - cron: '30 1 * * *'    # daily ICED hourly load curve, 07:00 IST (collect_iced job)
+  workflow_dispatch:        # allow manual runs from the Actions tab (runs both jobs)
 
 # Don't let two scheduled runs push at the same time (avoids push races).
 concurrency:
@@ -25,6 +26,8 @@ permissions:
 
 jobs:
   collect:
+    # Only on the */5 schedule (and manual runs); skip on the daily ICED cron.
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '*/5 * * * *'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -55,6 +58,49 @@ jobs:
           fi
           git commit -m "data: CG MERIT reading $(date -u +'%Y-%m-%dT%H:%MZ')"
           # rebase on any rows another run pushed meanwhile, then push (retry once)
+          for attempt in 1 2 3; do
+            git pull --rebase --autostash origin main && git push && break
+            echo "push attempt $attempt failed; retrying…"
+            sleep 5
+          done
+
+  # ---------------------------------------------------------------------------
+  # Daily: pull Chhattisgarh's hourly load-curve from NITI Aayog's ICED portal
+  # (icedapi.niti.gov.in JSON API behind the "Download XLS" button) and upsert it
+  # into data/cg_hourly_iced.csv. Yearly aggregate data, so once a day is plenty.
+  # ---------------------------------------------------------------------------
+  collect_iced:
+    # Only on the daily schedule (and manual runs); skip on the */5 MERIT cron.
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '30 1 * * *'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Fetch CG hourly load curve from ICED
+        run: python scripts/fetch_iced_data.py --csv data/cg_hourly_iced.csv --all-years
+
+      - name: Commit & push if changed
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/cg_hourly_iced.csv
+          if git diff --staged --quiet; then
+            echo "No new ICED data to commit."
+            exit 0
+          fi
+          git commit -m "data: CG ICED hourly load curve $(date -u +'%Y-%m-%dT%H:%MZ')"
           for attempt in 1 2 3; do
             git pull --rebase --autostash origin main && git push && break
             echo "push attempt $attempt failed; retrying…"
