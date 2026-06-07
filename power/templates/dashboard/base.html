@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{% block title %}Dashboard{% endblock %} · Chhattisgarh Power</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg: #ffffff; --card: #f8f9fa; --border: #e9ecef;
+      --text: #1f2937; --muted: #6b7280;
+      --blue: #2563eb; --gray: #94a3b8; --green: #16a34a; --green-bg: #dcfce7;
+      --blue-bg: #dbeafe; --shadow: 0 1px 3px rgba(0,0,0,0.08);
+      --d1: #ef4444; --d2: #f59e0b; --d3: #7c3aed; --d4: #0d9488; --wt: #111827;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text);
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; line-height: 1.5; }
+    .wrap { max-width: 1280px; margin: 0 auto; padding: 24px; }
+
+    header { margin-bottom: 18px; }
+    h1 { font-size: 22px; margin: 0 0 4px; font-weight: 700; }
+    .subtitle { color: var(--muted); font-size: 13px; margin-bottom: 12px; }
+    .pills { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
+    .pill { font-size: 12px; font-weight: 600; padding: 5px 12px; border-radius: 999px; border: 1px solid var(--border); background: var(--card); color: var(--muted); }
+    .pill.green { background: var(--green-bg); color: var(--green); border-color: #bbf7d0; }
+    .pill.blue { background: var(--blue-bg); color: var(--blue); border-color: #bfdbfe; }
+
+    .nav { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 1px solid var(--border); }
+    .navlink { padding: 9px 14px; font-size: 14px; font-weight: 600; color: var(--muted); text-decoration: none; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+    .navlink:hover { color: var(--text); }
+    .navlink.on { color: var(--blue); border-bottom-color: var(--blue); }
+
+    .cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin: 18px 0 22px; }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; box-shadow: var(--shadow); }
+    .card .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+    .card .v { font-size: 22px; font-weight: 700; margin-top: 6px; }
+    .card .v small { font-size: 12px; color: var(--muted); font-weight: 500; }
+    .card .s { font-size: 11px; color: var(--muted); margin-top: 3px; }
+
+    .panel { background: var(--bg); border: 1px solid var(--border); border-radius: 12px; padding: 18px; margin-bottom: 20px; box-shadow: var(--shadow); }
+    .panel h2 { font-size: 16px; margin: 0 0 4px; font-weight: 600; }
+    .panel .ptag { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+    .controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; margin-bottom: 6px; }
+    .field { display: flex; flex-direction: column; gap: 5px; }
+    .field label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+    input[type="date"] { background: #fff; color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 14px; outline: none; min-width: 150px; }
+    input:focus { border-color: var(--blue); }
+    button { background: var(--blue); color: #fff; border: none; border-radius: 8px; padding: 9px 18px; font-size: 14px; font-weight: 600; cursor: pointer; }
+    button:hover { opacity: .92; } button:active { transform: translateY(1px); }
+
+    .chart-box { position: relative; height: 380px; margin-top: 10px; }
+    .overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(255,255,255,.9); color: var(--muted); font-size: 14px; text-align: center; padding: 16px; }
+    .overlay.hidden { display: none; }
+    .spinner { width: 26px; height: 26px; border: 3px solid var(--border); border-top-color: var(--blue); border-radius: 50%; animation: spin .8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .note { font-size: 12px; color: var(--muted); margin-top: 10px; }
+
+    .table-wrap { overflow: auto; max-height: 600px; margin-top: 8px; border: 1px solid var(--border); border-radius: 8px; }
+    table.fc { width: 100%; border-collapse: collapse; font-size: 13px; }
+    table.fc th, table.fc td { padding: 7px 12px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
+    table.fc th { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); font-weight: 600; background: var(--card); position: sticky; top: 0; }
+    table.fc tbody tr:hover { background: #f8fafc; }
+    table.fc td.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .tmuted { color: var(--muted); text-align: center; padding: 14px; }
+    .badge { display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 6px; }
+    .badge.xgb { background: #dbeafe; color: #2563eb; }
+    .badge.prophet { background: #ede9fe; color: #7c3aed; }
+    .badge.fc { background: #dcfce7; color: #16a34a; }
+    .badge.clim { background: #fef3c7; color: #d97706; }
+
+    .footer { color: var(--muted); font-size: 12px; text-align: center; margin-top: 8px; }
+    .footer a { color: var(--blue); text-decoration: none; }
+    @media (max-width: 900px) { .cards { grid-template-columns: repeat(2, 1fr); } }
+    @media (max-width: 560px) { .cards { grid-template-columns: 1fr; } .chart-box { height: 320px; } }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>Chhattisgarh Power Demand — Live Dashboard</h1>
+      <div class="subtitle">WRLDC · MERIT India · Open-Meteo&nbsp; | &nbsp;Auto-refreshes every 24h</div>
+      <div class="pills">
+        <span class="pill" id="pillLive">CG Live: … MW</span>
+        <span class="pill" id="pillModels">Models …</span>
+        <span class="pill green" id="pillTemp">Weather: live · 4-district</span>
+      </div>
+      <nav class="nav">
+        <a class="navlink {% if active == 'overview' %}on{% endif %}" href="/dashboard/cg/">Overview</a>
+        <a class="navlink {% if active == 'intraday' %}on{% endif %}" href="/dashboard/cg/intraday/">Today's Load</a>
+        <a class="navlink {% if active == 'forecast' %}on{% endif %}" href="/dashboard/cg/forecast/">30-Day Forecast</a>
+        <a class="navlink {% if active == 'temperature' %}on{% endif %}" href="/dashboard/cg/temperature/">Temperature</a>
+        <a class="navlink {% if active == 'energy' %}on{% endif %}" href="/dashboard/cg/energy/">Energy Trend</a>
+      </nav>
+    </header>
+
+    {% block content %}{% endblock %}
+
+    <div class="footer"><span id="lastFetch"></span></div>
+  </div>
+
+  <!-- shared helpers -->
+  <script>
+    "use strict";
+    const FONT = { family: "system-ui, sans-serif" };
+    const COL = { blue: "#2563eb", gray: "#94a3b8", grid: "rgba(0,0,0,0.06)", muted: "#6b7280",
+                  d1: "#ef4444", d2: "#f59e0b", d3: "#7c3aed", d4: "#0d9488", wt: "#111827" };
+    const charts = {};
+    const fmt = (n, d = 0) => (n === null || n === undefined || isNaN(n))
+      ? "–" : Number(n).toLocaleString("en-IN", { maximumFractionDigits: d, minimumFractionDigits: d });
+    async function getJSON(url) {
+      const r = await fetch(url, { headers: { "Accept": "application/json" } });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.error || ("HTTP " + r.status));
+      return data;
+    }
+    const ov = (id) => document.getElementById(id);
+    function spin(id) { const o = ov(id); if (!o) return; o.classList.remove("hidden"); o.innerHTML = '<div class="spinner"></div>'; }
+    function msg(id, m) { const o = ov(id); if (!o) return; o.classList.remove("hidden"); o.innerHTML = '<div>' + m + '</div>'; }
+    function hide(id) { const o = ov(id); if (o) o.classList.add("hidden"); }
+    function destroy(k) { if (charts[k]) { charts[k].destroy(); delete charts[k]; } }
+    function stamp() { const e = ov("lastFetch"); if (e) e.textContent = "updated " + new Date().toLocaleString(); }
+
+    const barLabels = { id: "barLabels", afterDatasetsDraw(c) {
+      const x = c.ctx; c.data.datasets.forEach((ds, i) => { const m = c.getDatasetMeta(i);
+        m.data.forEach((bar, idx) => { const v = ds.data[idx]; if (v == null) return;
+          x.save(); x.fillStyle = "#374151"; x.font = "10px system-ui"; x.textAlign = "center";
+          x.fillText(Number(v).toLocaleString("en-IN", { maximumFractionDigits: 0 }), bar.x, bar.y - 5); x.restore(); }); }); } };
+
+    function baseScales(yTitle) {
+      return {
+        x: { grid: { color: COL.grid }, ticks: { color: COL.muted, font: FONT, maxRotation: 0, autoSkip: true, maxTicksLimit: 12 } },
+        y: { grid: { color: COL.grid }, ticks: { color: COL.muted, font: FONT, callback: v => fmt(v, 0) },
+             title: { display: true, text: yTitle, color: COL.muted, font: FONT } },
+      };
+    }
+    const commonOpts = (extra) => Object.assign({
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: { legend: { labels: { color: COL.muted, font: FONT, usePointStyle: true, boxWidth: 8 } } },
+    }, extra || {});
+
+    // header pills, shown on every page
+    async function loadHeader() {
+      try {
+        const s = await getJSON("/api/cg/model-stats/");
+        const p = ov("pillModels");
+        if (s.models_trained) { p.textContent = "Models Trained"; p.className = "pill blue"; }
+        else { p.textContent = "Models pending"; }
+      } catch (e) { /* ignore */ }
+      try {
+        const d = await getJSON("/api/cg/intraday/");
+        const now = new Date(); const slot = Math.min(287, Math.floor((now.getHours() * 60 + now.getMinutes()) / 5));
+        const live = (d.today && d.today[slot] && d.today[slot].load_mw != null) ? d.today[slot].load_mw : d.latest_load_mw;
+        const lp = ov("pillLive");
+        if (live != null) { lp.textContent = "CG Live: " + fmt(live, 0) + " MW"; lp.className = "pill green"; }
+      } catch (e) { /* ignore */ }
+    }
+    stamp();
+    loadHeader();
+  </script>
+
+  {% block script %}{% endblock %}
+</body>
+</html>

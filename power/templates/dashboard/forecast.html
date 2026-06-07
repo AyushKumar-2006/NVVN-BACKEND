@@ -1,0 +1,77 @@
+{% extends "dashboard/base.html" %}
+{% block title %}30-Day Forecast{% endblock %}
+
+{% block content %}
+  <section class="panel">
+    <h2>CG Power Demand Forecast — Next 30 Days</h2>
+    <div class="ptag">Daily peak demand forecast from today.</div>
+    <div class="chart-box"><canvas id="p2Chart"></canvas><div class="overlay" id="p2Overlay"><div class="spinner"></div></div></div>
+    <div class="note">Short-term: XGBoost · Long-term: Prophet</div>
+  </section>
+
+  <section class="panel">
+    <h2>30-Day Forecast Table — Load &amp; Temperature</h2>
+    <div class="ptag">Load: day 1-15 XGBoost · day 16-30 Prophet. &nbsp;Temperature: open-meteo forecast (~16 days) then 30-year climatology.</div>
+    <div class="table-wrap">
+      <table class="fc">
+        <thead><tr>
+          <th>Day</th><th>Date</th><th style="text-align:right">Load (MW)</th><th>Load model</th>
+          <th style="text-align:right">Temp (°C)</th><th>Temp source</th>
+        </tr></thead>
+        <tbody id="fcTableBody"><tr><td colspan="6" class="tmuted">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+{% endblock %}
+
+{% block script %}
+<script>
+  function modelBadge(m) {
+    return m === "xgboost" ? '<span class="badge xgb">XGBoost</span>' : '<span class="badge prophet">Prophet</span>';
+  }
+  function tempBadge(src) {
+    if (src === "climatology_30yr") return '<span class="badge clim">30-yr climatology</span>';
+    if (src === "forecast") return '<span class="badge fc">Forecast</span>';
+    if (src === "archive") return '<span class="badge fc">Archive</span>';
+    return '<span class="badge">' + (src || "—") + '</span>';
+  }
+  function renderForecastTable(rows) {
+    const body = rows.map((r, i) =>
+      '<tr><td>' + (i + 1) + '</td><td>' + r.date + '</td>' +
+      '<td class="num">' + fmt(r.forecast_mw, 0) + '</td><td>' + modelBadge(r.model) + '</td>' +
+      '<td class="num">' + (r.temperature_c == null ? "–" : fmt(r.temperature_c, 1)) + '</td>' +
+      '<td>' + tempBadge(r.temp_source) + '</td></tr>'
+    ).join("");
+    ov("fcTableBody").innerHTML = body || '<tr><td colspan="6" class="tmuted">No data</td></tr>';
+  }
+
+  async function loadForecast() {
+    spin("p2Overlay");
+    try {
+      const d = await getJSON("/api/cg/forecast/?days=30");
+      const labels = d.forecast.map(r => r.date);
+      const models = d.forecast.map(r => r.model);
+      destroy("p2");
+      charts.p2 = new Chart(ov("p2Chart"), {
+        type: "line",
+        data: { labels, datasets: [
+          { label: "Forecast peak (MW)", data: d.forecast.map(r => r.forecast_mw),
+            borderColor: COL.blue, backgroundColor: "rgba(37,99,235,.08)", borderWidth: 2.4,
+            pointRadius: 0, tension: .4, fill: true } ] },
+        options: commonOpts({ scales: baseScales("Peak load (MW)"), plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: {
+            label: c => "Forecast: " + fmt(c.parsed.y, 0) + " MW",
+            afterLabel: c => "Model: " + (models[c.dataIndex] === "xgboost" ? "XGBoost" : "Prophet") } } } }),
+      });
+      hide("p2Overlay");
+      renderForecastTable(d.forecast);
+    } catch (e) {
+      destroy("p2"); msg("p2Overlay", "Error: " + e.message);
+      ov("fcTableBody").innerHTML = '<tr><td colspan="6" class="tmuted">Error: ' + e.message + '</td></tr>';
+    }
+  }
+  loadForecast();
+  setInterval(() => { stamp(); loadHeader(); loadForecast(); }, 24 * 60 * 60 * 1000);
+</script>
+{% endblock %}

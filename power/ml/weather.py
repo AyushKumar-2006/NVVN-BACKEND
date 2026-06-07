@@ -775,3 +775,75 @@ def fetch_daily_weather(state_short: str, from_date, days: int = 30, climatology
         {"date": d.isoformat(), "temperature_c": temps[d], "source": source.get(d, "fallback")}
         for d in target_dates
     ]
+
+
+def fetch_daily_weather_districts(from_date, days: int = 30):
+    """Per-district daily mean temperature for ``days`` days from ``from_date``,
+    for every CG district, plus the population-weighted blend.
+
+    Uses the same sources as ``fetch_daily_weather`` (open-meteo archive for past
+    days, the forecast API for today..+15, and the 30-year climate normal — i.e.
+    the seasonal pattern from prior years — beyond the forecast horizon), but
+    keeps the districts separate so each can be drawn as its own line.
+
+    Returns::
+        {"districts": [{"name", "weight", "series": [{date, temperature_c, source}]}],
+         "weighted":  [{date, temperature_c}]}
+    """
+    if isinstance(from_date, str):
+        from_date = _to_date(from_date)
+    today = datetime.now().date()
+    horizon = today + timedelta(days=FORECAST_HORIZON_DAYS)
+    target_dates = [from_date + timedelta(days=i) for i in range(days)]
+
+    per = []
+    for dist in CG_DISTRICTS:
+        coords = {"lat": dist["lat"], "lon": dist["lon"]}
+        label = f"CG/{dist['name']}"
+        temps, src = {}, {}
+
+        past = [d for d in target_dates if d < today]
+        if past:
+            df = _request_daily_single(coords, min(past), max(past), ARCHIVE_URL, label)
+            for _, r in df.iterrows():
+                if r["temp"] is not None:
+                    temps[r["date"]] = round(float(r["temp"]), 2)
+                    src[r["date"]] = "archive"
+
+        fc = [d for d in target_dates if today <= d <= horizon]
+        if fc:
+            df = _request_daily_single(coords, min(fc), max(fc), FORECAST_URL, label)
+            for _, r in df.iterrows():
+                if r["temp"] is not None:
+                    temps[r["date"]] = round(float(r["temp"]), 2)
+                    src[r["date"]] = "forecast"
+
+        remaining = [d for d in target_dates if temps.get(d) is None]
+        if remaining:
+            clim = _climate_normal_daily_single(coords, remaining, label)
+            for d, t in clim.items():
+                if t is not None:
+                    temps[d] = t
+                    src[d] = "climatology_30yr"
+
+        per.append({
+            "name": dist["name"],
+            "weight": dist["weight"],
+            "series": [{"date": d.isoformat(),
+                        "temperature_c": temps.get(d),
+                        "source": src.get(d, "fallback")} for d in target_dates],
+        })
+
+    weighted = []
+    for i, d in enumerate(target_dates):
+        num = den = 0.0
+        for p in per:
+            v = p["series"][i]["temperature_c"]
+            if v is None:
+                continue
+            num += p["weight"] * v
+            den += p["weight"]
+        weighted.append({"date": d.isoformat(),
+                         "temperature_c": round(num / den, 2) if den else None})
+
+    return {"districts": per, "weighted": weighted}

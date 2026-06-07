@@ -1,0 +1,44 @@
+{% extends "dashboard/base.html" %}
+{% block title %}Temperature{% endblock %}
+
+{% block content %}
+  <section class="panel">
+    <h2>CG District Temperature — Next 30 Days</h2>
+    <div class="ptag">Four highest-load districts (population-weighted into the demand model).</div>
+    <div class="chart-box"><canvas id="p3Chart"></canvas><div class="overlay" id="p3Overlay"><div class="spinner"></div></div></div>
+    <div class="note">Raipur · Bilaspur · Korba · Jagdalpur — open-meteo daily mean (forecast then 30-yr climatology).</div>
+  </section>
+{% endblock %}
+
+{% block script %}
+<script>
+  async function loadDistricts() {
+    spin("p3Overlay");
+    try {
+      const d = await getJSON("/api/cg/districts-temp/?days=30");
+      if (!d.districts || !d.districts.length) { destroy("p3"); msg("p3Overlay", "No data available"); return; }
+      const labels = d.districts[0].series.map(p => p.date);
+      const palette = [COL.d1, COL.d2, COL.d3, COL.d4];
+      const ds = d.districts.map((dist, i) => ({
+        label: dist.name, data: dist.series.map(p => p.temperature_c),
+        borderColor: palette[i % palette.length], backgroundColor: palette[i % palette.length],
+        borderWidth: 1.8, pointRadius: 0, tension: .35, spanGaps: true }));
+      if (d.weighted && d.weighted.length) ds.push({
+        label: "Weighted", data: d.weighted.map(p => p.temperature_c),
+        borderColor: COL.wt, backgroundColor: COL.wt, borderWidth: 2.4, borderDash: [4, 3], pointRadius: 0, tension: .35, spanGaps: true });
+      destroy("p3");
+      charts.p3 = new Chart(ov("p3Chart"), {
+        type: "line", data: { labels, datasets: ds },
+        options: commonOpts({
+          scales: { x: { grid: { color: COL.grid }, ticks: { color: COL.muted, font: FONT, autoSkip: true, maxTicksLimit: 12, maxRotation: 0 } },
+                    y: { grid: { color: COL.grid }, ticks: { color: COL.muted, font: FONT, callback: v => v + "°" }, title: { display: true, text: "Temperature (°C)", color: COL.muted, font: FONT } } },
+          plugins: { legend: { labels: { color: COL.muted, font: FONT, usePointStyle: true, boxWidth: 8 } },
+            tooltip: { callbacks: { label: c => c.dataset.label + ": " + fmt(c.parsed.y, 1) + " °C" } } } }),
+      });
+      hide("p3Overlay");
+    } catch (e) { destroy("p3"); msg("p3Overlay", "Error: " + e.message); }
+  }
+  loadDistricts();
+  setInterval(() => { stamp(); loadHeader(); loadDistricts(); }, 24 * 60 * 60 * 1000);
+</script>
+{% endblock %}

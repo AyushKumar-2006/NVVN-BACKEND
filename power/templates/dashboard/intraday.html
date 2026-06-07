@@ -1,0 +1,44 @@
+{% extends "dashboard/base.html" %}
+{% block title %}Today's Load{% endblock %}
+
+{% block content %}
+  <section class="panel">
+    <h2>Today's CG Load — 5-Minute Curve</h2>
+    <div class="ptag">Live intraday demand vs the same weekday one week earlier.</div>
+    <div class="controls">
+      <div class="field"><label for="p1date">Date</label><input type="date" id="p1date" /></div>
+      <div class="field"><label>&nbsp;</label><button id="p1apply">Show</button></div>
+    </div>
+    <div class="chart-box"><canvas id="p1Chart"></canvas><div class="overlay" id="p1Overlay"><div class="spinner"></div></div></div>
+    <div class="note">Source: MERIT India · <code>state=CG</code> · 5-minute resolution.</div>
+  </section>
+{% endblock %}
+
+{% block script %}
+<script>
+  async function loadIntraday(dateStr) {
+    spin("p1Overlay");
+    try {
+      const d = await getJSON("/api/cg/intraday/" + (dateStr ? ("?date=" + dateStr) : ""));
+      ov("p1date").value = d.date || "";
+      if (!d.today || !d.today.length) { destroy("p1"); msg("p1Overlay", "No data available"); return; }
+      const labels = d.today.map(r => r.datetime.slice(11, 16));
+      destroy("p1");
+      charts.p1 = new Chart(ov("p1Chart"), {
+        type: "line",
+        data: { labels, datasets: [
+          { label: "Today", data: d.today.map(r => r.load_mw), borderColor: COL.blue, backgroundColor: COL.blue, borderWidth: 2, pointRadius: 0, tension: .25 },
+          { label: "7 days ago", data: d.week_ago.map(r => r.load_mw), borderColor: COL.gray, backgroundColor: COL.gray, borderWidth: 1, borderDash: [5, 3], pointRadius: 0, tension: .25 },
+        ] },
+        options: commonOpts({ scales: baseScales("Load (MW)"), plugins: {
+          legend: { labels: { color: COL.muted, font: FONT, usePointStyle: true, boxWidth: 8 } },
+          tooltip: { callbacks: { label: c => c.dataset.label + ": " + fmt(c.parsed.y, 0) + " MW" } } } }),
+      });
+      hide("p1Overlay");
+    } catch (e) { destroy("p1"); msg("p1Overlay", "Error: " + e.message); }
+  }
+  ov("p1apply").addEventListener("click", () => loadIntraday(ov("p1date").value || null));
+  loadIntraday(null);
+  setInterval(() => { stamp(); loadHeader(); loadIntraday(ov("p1date").value || null); }, 24 * 60 * 60 * 1000);
+</script>
+{% endblock %}

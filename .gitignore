@@ -142,3 +142,6 @@ local_settings.py
 # =========================
 *.sqlite3-shm
 *.sqlite3-wal
+
+# Claude Code personal settings
+.claude/settings.local.json

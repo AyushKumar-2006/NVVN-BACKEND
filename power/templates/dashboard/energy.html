@@ -1,0 +1,38 @@
+{% extends "dashboard/base.html" %}
+{% block title %}Energy Trend{% endblock %}
+
+{% block content %}
+  <section class="panel">
+    <h2>CG Annual Energy Consumption (MU) — 2015 to 2025</h2>
+    <div class="ptag">Total energy met per year (million units).</div>
+    <div class="chart-box"><canvas id="p4Chart"></canvas><div class="overlay" id="p4Overlay"><div class="spinner"></div></div></div>
+    <div class="note">Source: Grid-India POSOCO PSP · daily MU data. Partial years marked with *.</div>
+  </section>
+{% endblock %}
+
+{% block script %}
+<script>
+  async function loadEnergy() {
+    spin("p4Overlay");
+    try {
+      const d = await getJSON("/api/cg/energy-trend/");
+      if (!d.trend || !d.trend.length) { destroy("p4"); msg("p4Overlay", "No data available"); return; }
+      const labels = d.trend.map(t => (t.partial && t.days < 300) ? (t.year + "*") : t.year);
+      const colors = d.trend.map(t => (t.partial && t.days < 300) ? "#93c5fd" : COL.blue);
+      destroy("p4");
+      charts.p4 = new Chart(ov("p4Chart"), {
+        type: "bar",
+        data: { labels, datasets: [{ label: "Energy (MU)", data: d.trend.map(t => t.total_mu),
+          backgroundColor: colors, hoverBackgroundColor: "#1d4ed8", borderRadius: 4, maxBarThickness: 60 }] },
+        options: commonOpts({ layout: { padding: { top: 22 } }, scales: baseScales("Energy (MU)"),
+          plugins: { legend: { display: false },
+            tooltip: { callbacks: { label: c => fmt(c.parsed.y, 0) + " MU" + (d.trend[c.dataIndex].partial ? " (partial)" : "") } } } }),
+        plugins: [barLabels],
+      });
+      hide("p4Overlay");
+    } catch (e) { destroy("p4"); msg("p4Overlay", "Error: " + e.message); }
+  }
+  loadEnergy();
+  setInterval(() => { stamp(); loadHeader(); loadEnergy(); }, 24 * 60 * 60 * 1000);
+</script>
+{% endblock %}

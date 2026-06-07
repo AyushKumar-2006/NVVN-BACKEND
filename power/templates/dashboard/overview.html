@@ -1,0 +1,109 @@
+{% extends "dashboard/base.html" %}
+{% block title %}Overview{% endblock %}
+
+{% block content %}
+  <style>
+    .hero { display: flex; align-items: center; gap: 22px; flex-wrap: wrap; }
+    .hero-left { min-width: 190px; }
+    .hero-k { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+    .hero-v { font-size: 30px; font-weight: 800; margin-top: 6px; line-height: 1.1; }
+    .hero-v small { font-size: 14px; color: var(--muted); font-weight: 600; }
+    .hero-sub { font-size: 12px; color: var(--muted); margin-top: 4px; }
+    .spark { flex: 1 1 260px; height: 120px; min-width: 240px; }
+    .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+    .tile { display: block; text-decoration: none; color: inherit; background: var(--card); border: 1px solid var(--border);
+            border-radius: 12px; padding: 16px 18px; box-shadow: var(--shadow); transition: transform .08s ease, border-color .15s; }
+    .tile:hover { transform: translateY(-2px); border-color: var(--blue); }
+    .tile .tt { font-weight: 700; font-size: 15px; }
+    .tile .dd { color: var(--muted); font-size: 12.5px; margin-top: 4px; line-height: 1.5; }
+    .tile .go { color: var(--blue); font-size: 12px; font-weight: 600; margin-top: 10px; }
+  </style>
+
+  <!-- metric cards -->
+  <div class="cards">
+    <div class="card"><div class="k">Today's Peak</div><div class="v" id="c_peak">…</div><div class="s">forecast (MW)</div></div>
+    <div class="card"><div class="k">30-Day Peak</div><div class="v" id="c_peak30">…</div><div class="s">max forecast (MW)</div></div>
+    <div class="card"><div class="k">Avg Temp 30d</div><div class="v" id="c_temp">…</div><div class="s">4-district (°C)</div></div>
+    <div class="card"><div class="k">XGBoost MAPE</div><div class="v" id="c_mape">…</div><div class="s">test-set error</div></div>
+    <div class="card"><div class="k">Load Data Points</div><div class="v">888,874</div><div class="s">5-min readings</div></div>
+  </div>
+
+  <!-- hero: lightweight SVG sparkline of the 30-day forecast -->
+  <section class="panel hero">
+    <div class="hero-left">
+      <div class="hero-k">Demand outlook · next 30 days</div>
+      <div class="hero-v" id="h_peak">… <small>MW</small></div>
+      <div class="hero-sub" id="h_sub">today's forecast peak</div>
+    </div>
+    <svg id="spark" class="spark" viewBox="0 0 600 120" preserveAspectRatio="none" aria-label="30-day forecast sparkline"></svg>
+  </section>
+
+  <!-- section tiles -->
+  <h2 style="font-size:15px; margin:6px 0 12px; font-weight:600;">Explore</h2>
+  <div class="tiles">
+    <a class="tile" href="/dashboard/cg/intraday/">
+      <div class="tt">Today's Load</div>
+      <div class="dd">Live 5-minute demand curve vs the same weekday last week.</div>
+      <div class="go">Open →</div>
+    </a>
+    <a class="tile" href="/dashboard/cg/forecast/">
+      <div class="tt">30-Day Forecast</div>
+      <div class="dd">Hybrid XGBoost / Prophet demand forecast — chart + day-by-day table.</div>
+      <div class="go">Open →</div>
+    </a>
+    <a class="tile" href="/dashboard/cg/temperature/">
+      <div class="tt">Temperature</div>
+      <div class="dd">Four highest-load districts for the next 30 days (population-weighted).</div>
+      <div class="go">Open →</div>
+    </a>
+    <a class="tile" href="/dashboard/cg/energy/">
+      <div class="tt">Energy Trend</div>
+      <div class="dd">Annual energy consumption (MU), 2015 to 2025.</div>
+      <div class="go">Open →</div>
+    </a>
+  </div>
+{% endblock %}
+
+{% block script %}
+<script>
+  function sparkline(values) {
+    const w = 600, h = 120, pad = 10;
+    const vals = values.filter(v => v != null);
+    if (vals.length < 2) return "";
+    const min = Math.min.apply(null, vals), max = Math.max.apply(null, vals), rng = (max - min) || 1;
+    const pts = values.map((v, i) => {
+      const x = pad + i * (w - 2 * pad) / (values.length - 1);
+      const y = h - pad - (v - min) / rng * (h - 2 * pad);
+      return x.toFixed(1) + "," + y.toFixed(1);
+    });
+    const line = pts.join(" ");
+    const area = pad + "," + (h - pad) + " " + line + " " + (w - pad) + "," + (h - pad);
+    return '<polygon points="' + area + '" fill="rgba(37,99,235,.10)" />' +
+           '<polyline points="' + line + '" fill="none" stroke="#2563eb" stroke-width="2.5" ' +
+           'stroke-linejoin="round" stroke-linecap="round" />';
+  }
+
+  async function loadOverview() {
+    try {
+      const d = await getJSON("/api/cg/forecast/?days=30");
+      if (d.summary) {
+        ov("c_peak").innerHTML = fmt(d.summary.today_peak_mw, 0) + ' <small>MW</small>';
+        ov("c_peak30").innerHTML = fmt(d.summary.peak_30d_mw, 0) + ' <small>MW</small>';
+        ov("c_temp").innerHTML = fmt(d.summary.avg_temp_c, 1) + ' <small>°C</small>';
+        ov("h_peak").innerHTML = fmt(d.summary.today_peak_mw, 0) + ' <small>MW</small>';
+        ov("h_sub").textContent = "today's forecast peak · 30-day high " + fmt(d.summary.peak_30d_mw, 0) + " MW";
+      }
+      ov("spark").innerHTML = sparkline(d.forecast.map(r => r.forecast_mw));
+    } catch (e) {
+      ov("h_sub").textContent = "forecast unavailable";
+    }
+    try {
+      const s = await getJSON("/api/cg/model-stats/");
+      if (s.eval_metrics && s.eval_metrics.models)
+        ov("c_mape").innerHTML = fmt(s.eval_metrics.models.xgboost.mape, 2) + ' <small>%</small>';
+    } catch (e) { /* ignore */ }
+  }
+  loadOverview();
+  setInterval(() => { stamp(); loadHeader(); loadOverview(); }, 24 * 60 * 60 * 1000);
+</script>
+{% endblock %}
