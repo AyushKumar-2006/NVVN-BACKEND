@@ -1,150 +1,33 @@
 # NVVN-Backend — Chhattisgarh Power Demand Forecasting
 
-A Django backend that forecasts **Chhattisgarh (CG) electricity demand** and serves it
-through a clean, multi-page dashboard. It learns from the real WRLDC demand record,
-predicts the next 30 days of peak load with a two-model strategy, and pairs every
-forecast with a district-weighted temperature outlook.
+A Django backend that forecasts Chhattisgarh (CG) electricity demand and serves it
+through a multi-page dashboard. Built with Django, django-ninja, XGBoost, Prophet and Chart.js.
 
-Built with Django, django-ninja, XGBoost, Prophet, pandas and Chart.js.
-
----
-
-## Highlights
-
-- **30-day demand forecast** — XGBoost for the near term (days 1–15) and Prophet for the
-  longer horizon (days 16–30), joined into one smooth, continuous curve.
-- **District-aware weather** — temperature is the population-weighted average of the four
-  highest-load districts (Raipur, Bilaspur, Korba, Jagdalpur), live from Open-Meteo with a
-  30-year climate normal beyond the forecast window.
-- **Always current** — a daily job keeps the 5-minute load series and the weather record up
-  to date, so the dashboard never shows a gap.
-- **Honest accuracy** — every retrain reports MAE, RMSE and MAPE on a held-out test set
-  (XGBoost ≈ 3.4% MAPE on daily peak).
-- **Clean JSON API** — eight focused `/api/cg/` endpoints power the dashboard and any client.
-
----
-
-## Dashboard
-
-Run the server and open **http://127.0.0.1:8000/dashboard/cg/**
-
-| Page | URL | What it shows |
-|------|-----|---------------|
-| Overview | `/dashboard/cg/` | Key metrics + a 30-day demand outlook |
-| Today's Load | `/dashboard/cg/intraday/` | Live 5-minute demand curve vs last week |
-| 30-Day Forecast | `/dashboard/cg/forecast/` | Forecast chart + a day-by-day table |
-| Temperature | `/dashboard/cg/temperature/` | Four district temperatures, next 30 days |
-| Energy Trend | `/dashboard/cg/energy/` | Annual energy consumption, 2015–2025 |
-
----
+- **30-day forecast** — XGBoost (days 1–15) + Prophet (days 16–30) as one smooth curve.
+- **Weather-aware** — population-weighted temperature from 4 districts (Raipur, Bilaspur, Korba, Jagdalpur).
+- **Always current** — a daily job keeps the load and weather data up to date.
 
 ## Quick start
 
 ```bash
-# 1. install dependencies
 pip install -r requirements.txt
-
-# 2. set up the database
 python manage.py migrate
-
-# 3. (optional) train models + bring data up to date
-python manage.py retrain_cg_models
-python manage.py backfill_cg_live
-
-# 4. run
 python manage.py runserver
 ```
 
-- Dashboard: http://127.0.0.1:8000/dashboard/cg/
-- API docs (django-ninja): http://127.0.0.1:8000/api/docs
+Dashboard: http://127.0.0.1:8000/dashboard/cg/  ·  API docs: http://127.0.0.1:8000/api/docs
 
----
+## Dashboard
 
-## How the forecast works
+`Overview` · `Today's Load` · `30-Day Forecast` · `Temperature` · `Energy Trend`
+— all under `/dashboard/cg/`.
 
-The model predicts the **daily peak load (MW)** — the most consistently reported and
-operationally important demand figure.
+## Common commands
 
-- **Features:** hour, day-of-week, month, weekend flag, and lagged load (1-day, 7-day,
-  7-day rolling mean).
-- **Two models, one line:** XGBoost is accurate short-term; Prophet is steadier further out.
-  Days 1–15 use XGBoost, days 16–30 use Prophet, and the seam is cross-faded so the line
-  reads as one smooth forecast. The tooltip still tells you which model drives each day.
-- **Temperature track:** the 4-district weighted mean — Open-Meteo forecast for the first
-  ~16 days, then a 30-year climate normal — so the demand outlook always has a weather
-  context, even at the end of the horizon.
-
----
-
-## API
-
-All endpoints are under `/api/cg/` and return JSON.
-
-| Endpoint | Description |
-|----------|-------------|
-| `GET /api/cg/forecast/?days=30` | 30-day forecast (hybrid load + temperature, per day) |
-| `GET /api/cg/intraday/?date=YYYY-MM-DD` | 5-minute load curve for a day (defaults to today) |
-| `GET /api/cg/districts-temp/?days=30` | Per-district + weighted temperature outlook |
-| `GET /api/cg/actuals/?start=&end=` | Actual daily peak demand |
-| `GET /api/cg/compare/?start=&end=` | Actual vs forecast with error metrics |
-| `GET /api/cg/model-stats/` | Eval metrics, last retrain time, data count |
-| `GET /api/cg/weather/?start=&end=` | Historical CG weather |
-| `GET /api/cg/energy-trend/` | Annual energy consumption (MU) |
-
----
-
-## Management commands
-
-| Command | Purpose |
-|---------|---------|
-| `python manage.py retrain_cg_models` | Train XGBoost + Prophet, print metrics, save models |
-| `python manage.py backfill_cg_live` | Bring the 5-minute load + 4-district weather up to today |
-| `python manage.py fetch_wrldc_psp --years 2026` | Pull real CG demand from the WRLDC PSP archive |
-| `python manage.py setup_cron` | Print the exact crontab line for this machine |
-
----
-
-## Automation
-
-A single daily cron job keeps everything fresh:
-
-```cron
-0 2 * * * /path/to/NVVN-backend/scripts/fetch_daily.sh
+```bash
+python manage.py retrain_cg_models     # train XGBoost + Prophet, print metrics
+python manage.py backfill_cg_live      # bring load + weather up to today
+python manage.py fetch_wrldc_psp --years 2026   # pull real WRLDC demand
 ```
 
-`scripts/fetch_daily.sh` fetches the latest WRLDC data and then runs `backfill_cg_live`,
-so the dashboard's load, forecast and temperature stay current. Run
-`python manage.py setup_cron` to get the exact line for your machine.
-
----
-
-## Data sources
-
-| Source | Used for |
-|--------|----------|
-| WRLDC PSP archive | Real CG daily peak demand |
-| MERIT India | Live 5-minute state demand |
-| Grid-India / POSOCO PSP | Daily energy consumption (MU) |
-| Open-Meteo | District temperature (forecast + climate normal) |
-
----
-
-## Project structure
-
-```
-power/
-  ml/
-    cg_forecast.py        # forecasting pipeline (features, train, hybrid forecast)
-    weather.py            # 4-district population-weighted temperature
-    synthetic/            # synthetic generator used for gap-filling
-    models/               # saved models + eval_metrics.json
-  management/commands/    # retrain_cg_models, backfill_cg_live, setup_cron, ...
-  templates/dashboard/    # base.html + one page per section
-  views_cg.py             # /api/cg/ endpoints + dashboard views
-config/                   # Django settings + URLs
-scripts/fetch_daily.sh    # daily refresh runner (cron)
-docs/CG_FORECAST_GUIDE.md # full guide
-```
-
-For a deeper walkthrough — retraining, API examples, cron setup — see
-**[docs/CG_FORECAST_GUIDE.md](docs/CG_FORECAST_GUIDE.md)**.
+Full guide: [docs/CG_FORECAST_GUIDE.md](docs/CG_FORECAST_GUIDE.md)
