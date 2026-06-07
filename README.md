@@ -7,27 +7,13 @@ through a multi-page dashboard. Built with Django, django-ninja, XGBoost, Prophe
 - **Weather-aware** — population-weighted temperature from 4 districts (Raipur, Bilaspur, Korba, Jagdalpur).
 - **Always current** — a daily job keeps the load and weather data up to date.
 
-## Quick start
+## Run
 
-```bash
-pip install -r requirements.txt
-python manage.py migrate
-python manage.py runserver
-```
-
-Dashboard: http://127.0.0.1:8000/dashboard/cg/  ·  API docs: http://127.0.0.1:8000/api/docs
+Install the requirements, run migrations, then start the server. The dashboard opens at
+http://127.0.0.1:8000/dashboard/cg/ and the API docs at /api/docs.
 
 ## Dashboard
 
-`Overview` · `Today's Load` · `30-Day Forecast` · `Temperature` · `Energy Trend`
-— all under `/dashboard/cg/`.
-
-## Common commands
-
-```bash
-python manage.py retrain_cg_models     # train XGBoost + Prophet, print metrics
-python manage.py backfill_cg_live      # bring load + weather up to today
-python manage.py fetch_wrldc_psp --years 2026   # pull real WRLDC demand
-```
+Overview · Today's Load · 30-Day Forecast · Temperature · Energy Trend — all under `/dashboard/cg/`.
 
 Full guide: [docs/CG_FORECAST_GUIDE.md](docs/CG_FORECAST_GUIDE.md)
