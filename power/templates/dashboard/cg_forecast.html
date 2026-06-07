@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Chhattisgarh Power Demand — Live Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg: #ffffff; --card: #f8f9fa; --border: #e9ecef;
+      --text: #1f2937; --muted: #6b7280;
+      --blue: #2563eb; --gray: #94a3b8; --green: #16a34a; --green-bg: #dcfce7;
+      --blue-bg: #dbeafe; --shadow: 0 1px 3px rgba(0,0,0,0.08);
+      --d1: #ef4444; --d2: #f59e0b; --d3: #7c3aed; --d4: #0d9488; --wt: #111827;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text);
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; line-height: 1.5; }
+    .wrap { max-width: 1280px; margin: 0 auto; padding: 24px; }
+
+    header { margin-bottom: 16px; }
+    h1 { font-size: 22px; margin: 0 0 4px; font-weight: 700; }
+    .subtitle { color: var(--muted); font-size: 13px; margin-bottom: 12px; }
+    .pills { display: flex; flex-wrap: wrap; gap: 10px; }
+    .pill { font-size: 12px; font-weight: 600; padding: 5px 12px; border-radius: 999px; border: 1px solid var(--border); background: var(--card); color: var(--muted); }
+    .pill.green { background: var(--green-bg); color: var(--green); border-color: #bbf7d0; }
+    .pill.blue { background: var(--blue-bg); color: var(--blue); border-color: #bfdbfe; }
+
+    .cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin: 16px 0 22px; }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; box-shadow: var(--shadow); }
+    .card .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+    .card .v { font-size: 22px; font-weight: 700; margin-top: 6px; }
+    .card .v small { font-size: 12px; color: var(--muted); font-weight: 500; }
+    .card .s { font-size: 11px; color: var(--muted); margin-top: 3px; }
+
+    .panel { background: var(--bg); border: 1px solid var(--border); border-radius: 12px; padding: 18px; margin-bottom: 20px; box-shadow: var(--shadow); }
+    .panel h2 { font-size: 16px; margin: 0 0 4px; font-weight: 600; }
+    .panel .ptag { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+    .controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; margin-bottom: 6px; }
+    .field { display: flex; flex-direction: column; gap: 5px; }
+    .field label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+    input[type="date"] { background: #fff; color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 14px; outline: none; min-width: 150px; }
+    input:focus { border-color: var(--blue); }
+    button { background: var(--blue); color: #fff; border: none; border-radius: 8px; padding: 9px 18px; font-size: 14px; font-weight: 600; cursor: pointer; }
+    button.ghost { background: #fff; color: var(--text); border: 1px solid var(--border); }
+    button:hover { opacity: .92; } button:active { transform: translateY(1px); }
+
+    .chart-box { position: relative; height: 360px; margin-top: 10px; }
+    .overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(255,255,255,.9); color: var(--muted); font-size: 14px; text-align: center; padding: 16px; }
+    .overlay.hidden { display: none; }
+    .spinner { width: 26px; height: 26px; border: 3px solid var(--border); border-top-color: var(--blue); border-radius: 50%; animation: spin .8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .note { font-size: 12px; color: var(--muted); margin-top: 10px; }
+    .footer { color: var(--muted); font-size: 12px; text-align: center; margin-top: 8px; }
+    .footer a { color: var(--blue); text-decoration: none; }
+
+    .table-wrap { overflow: auto; max-height: 460px; margin-top: 8px; border: 1px solid var(--border); border-radius: 8px; }
+    table.fc { width: 100%; border-collapse: collapse; font-size: 13px; }
+    table.fc th, table.fc td { padding: 7px 12px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
+    table.fc th { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); font-weight: 600; background: var(--card); position: sticky; top: 0; }
+    table.fc tbody tr:hover { background: #f8fafc; }
+    table.fc td.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .tmuted { color: var(--muted); text-align: center; padding: 14px; }
+    .badge { display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 6px; }
+    .badge.xgb { background: #dbeafe; color: #2563eb; }
+    .badge.prophet { background: #ede9fe; color: #7c3aed; }
+    .badge.fc { background: #dcfce7; color: #16a34a; }
+    .badge.clim { background: #fef3c7; color: #d97706; }
+
+    @media (max-width: 900px) { .cards { grid-template-columns: repeat(2, 1fr); } }
+    @media (max-width: 560px) { .cards { grid-template-columns: 1fr; } .chart-box { height: 300px; } }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <!-- HEADER -->
+    <header>
+      <h1>Chhattisgarh Power Demand — Live Dashboard</h1>
+      <div class="subtitle">WRLDC · MERIT India · Open-Meteo&nbsp; | &nbsp;Auto-refreshes every 24h</div>
+      <div class="pills">
+        <span class="pill" id="pillLive">CG Live: … MW</span>
+        <span class="pill" id="pillModels">Models …</span>
+        <span class="pill" id="pillTemp">Weather: live · 4-district</span>
+      </div>
+    </header>
+
+    <!-- METRIC CARDS -->
+    <div class="cards">
+      <div class="card"><div class="k">Today's Peak</div><div class="v" id="c_peak">–</div><div class="s">forecast (MW)</div></div>
+      <div class="card"><div class="k">30-Day Peak</div><div class="v" id="c_peak30">–</div><div class="s">max forecast (MW)</div></div>
+      <div class="card"><div class="k">Avg Temp 30d</div><div class="v" id="c_temp">–</div><div class="s">4-district (°C)</div></div>
+      <div class="card"><div class="k">XGBoost MAPE</div><div class="v" id="c_mape">–</div><div class="s">test-set error</div></div>
+      <div class="card"><div class="k">Load Data Points</div><div class="v" id="c_total">888,874</div><div class="s">5-min readings</div></div>
+    </div>
+
+    <!-- PANEL 1 — TODAY INTRADAY -->
+    <section class="panel">
+      <h2>Today's CG Load — 5-Minute Curve</h2>
+      <div class="ptag">Live intraday demand vs the same weekday one week earlier.</div>
+      <div class="controls">
+        <div class="field"><label for="p1date">Date</label><input type="date" id="p1date" /></div>
+        <div class="field"><label>&nbsp;</label><button id="p1apply">Show</button></div>
+      </div>
+      <div class="chart-box"><canvas id="p1Chart"></canvas><div class="overlay" id="p1Overlay"><div class="spinner"></div></div></div>
+      <div class="note">Source: MERIT India · <code>state=CG</code> · 5-minute resolution.</div>
+    </section>
+
+    <!-- PANEL 2 — 30-DAY FORECAST -->
+    <section class="panel">
+      <h2>CG Power Demand Forecast — Next 30 Days</h2>
+      <div class="ptag">Daily peak demand forecast from today.</div>
+      <div class="chart-box"><canvas id="p2Chart"></canvas><div class="overlay" id="p2Overlay"><div class="spinner"></div></div></div>
+      <div class="note">Short-term: XGBoost · Long-term: Prophet</div>
+    </section>
+
+    <!-- PANEL 2b — 30-DAY FORECAST TABLE (load + temperature) -->
+    <section class="panel">
+      <h2>30-Day Forecast Table — Load &amp; Temperature</h2>
+      <div class="ptag">Load: day 1-15 XGBoost · day 16-30 Prophet. &nbsp;Temperature: open-meteo forecast (~16 days) then 30-year climatology.</div>
+      <div class="table-wrap">
+        <table class="fc">
+          <thead><tr>
+            <th>Day</th><th>Date</th><th style="text-align:right">Load (MW)</th><th>Load model</th>
+            <th style="text-align:right">Temp (°C)</th><th>Temp source</th>
+          </tr></thead>
+          <tbody id="fcTableBody"><tr><td colspan="6" class="tmuted">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- PANEL 3 — DISTRICT TEMPERATURE -->
+    <section class="panel">
+      <h2>CG District Temperature — Next 30 Days</h2>
+      <div class="ptag">Four highest-load districts (population-weighted into the demand model).</div>
+      <div class="chart-box"><canvas id="p3Chart"></canvas><div class="overlay" id="p3Overlay"><div class="spinner"></div></div></div>
+      <div class="note">Raipur · Bilaspur · Korba · Jagdalpur — open-meteo daily mean.</div>
+    </section>
+
+    <!-- PANEL 4 — ENERGY TREND -->
+    <section class="panel">
+      <h2>CG Annual Energy Consumption (MU) — 2015 to 2025</h2>
+      <div class="ptag">Total energy met per year (million units).</div>
+      <div class="chart-box"><canvas id="p4Chart"></canvas><div class="overlay" id="p4Overlay"><div class="spinner"></div></div></div>
+      <div class="note">Source: Grid-India POSOCO PSP · daily MU data.</div>
+    </section>
+
+    <div class="footer">
+      APIs:
+      <a href="/api/cg/intraday/" target="_blank">intraday</a> ·
+      <a href="/api/cg/forecast/?days=30" target="_blank">forecast</a> ·
+      <a href="/api/cg/districts-temp/" target="_blank">districts-temp</a> ·
+      <a href="/api/cg/energy-trend/" target="_blank">energy-trend</a>
+      &nbsp;|&nbsp; <span id="lastFetch"></span>
+    </div>
+  </div>
+
+  <script>
+    "use strict";
+    const FONT = { family: "system-ui, sans-serif" };
+    const COL = { blue: "#2563eb", gray: "#94a3b8", grid: "rgba(0,0,0,0.06)", muted: "#6b7280",
+                  d1: "#ef4444", d2: "#f59e0b", d3: "#7c3aed", d4: "#0d9488", wt: "#111827" };
+    const charts = {};
+    const fmt = (n, d = 0) => (n === null || n === undefined || isNaN(n))
+      ? "–" : Number(n).toLocaleString("en-IN", { maximumFractionDigits: d, minimumFractionDigits: d });
+
+    async function getJSON(url) {
+      const r = await fetch(url, { headers: { "Accept": "application/json" } });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.error || ("HTTP " + r.status));
+      return data;
+    }
+    const ov = (id) => document.getElementById(id);
+    function spin(id) { const o = ov(id); o.classList.remove("hidden"); o.innerHTML = '<div class="spinner"></div>'; }
+    function msg(id, m) { const o = ov(id); o.classList.remove("hidden"); o.innerHTML = '<div>' + m + '</div>'; }
+    function hide(id) { ov(id).classList.add("hidden"); }
+    function destroy(k) { if (charts[k]) { charts[k].destroy(); delete charts[k]; } }
+
+    const barLabels = { id: "barLabels", afterDatasetsDraw(c) {
+      const x = c.ctx; c.data.datasets.forEach((ds, i) => { const m = c.getDatasetMeta(i);
+        m.data.forEach((bar, idx) => { const v = ds.data[idx]; if (v == null) return;
+          x.save(); x.fillStyle = "#374151"; x.font = "10px system-ui"; x.textAlign = "center";
+          x.fillText(Number(v).toLocaleString("en-IN", { maximumFractionDigits: 0 }), bar.x, bar.y - 5); x.restore(); }); }); } };
+
+    function baseScales(yTitle) {
+      return {
+        x: { grid: { color: COL.grid }, ticks: { color: COL.muted, font: FONT, maxRotation: 0, autoSkip: true, maxTicksLimit: 12 } },
+        y: { grid: { color: COL.grid }, ticks: { color: COL.muted, font: FONT, callback: v => fmt(v, 0) },
+             title: { display: true, text: yTitle, color: COL.muted, font: FONT } },
+      };
+    }
+    const commonOpts = (extra) => Object.assign({
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: { legend: { labels: { color: COL.muted, font: FONT, usePointStyle: true, boxWidth: 8 } } },
+    }, extra || {});
+
+    // ---- model-stats: pill + MAPE ----
+    async function loadStats() {
+      try {
+        const s = await getJSON("/api/cg/model-stats/");
+        const p = ov("pillModels");
+        if (s.models_trained) { p.textContent = "Models Trained"; p.className = "pill blue"; }
+        else { p.textContent = "Models pending"; p.className = "pill"; }
+        if (s.eval_metrics && s.eval_metrics.models)
+          ov("c_mape").innerHTML = fmt(s.eval_metrics.models.xgboost.mape, 2) + ' <small>%</small>';
+      } catch (e) { ov("pillModels").textContent = "Models: " + e.message; }
+    }
+
+    // ---- PANEL 1: today intraday ----
+    async function loadIntraday(dateStr) {
+      spin("p1Overlay");
+      try {
+        const d = await getJSON("/api/cg/intraday/" + (dateStr ? ("?date=" + dateStr) : ""));
+        ov("p1date").value = d.date || "";
+        if (!d.today || !d.today.length) { destroy("p1"); msg("p1Overlay", "No data available"); return; }
+        const labels = d.today.map(r => r.datetime.slice(11, 16));
+        destroy("p1");
+        charts.p1 = new Chart(ov("p1Chart"), {
+          type: "line",
+          data: { labels, datasets: [
+            { label: "Today", data: d.today.map(r => r.load_mw), borderColor: COL.blue, backgroundColor: COL.blue, borderWidth: 2, pointRadius: 0, tension: .25 },
+            { label: "7 days ago", data: d.week_ago.map(r => r.load_mw), borderColor: COL.gray, backgroundColor: COL.gray, borderWidth: 1, borderDash: [5, 3], pointRadius: 0, tension: .25 },
+          ] },
+          options: commonOpts({ scales: baseScales("Load (MW)"), plugins: {
+            legend: { labels: { color: COL.muted, font: FONT, usePointStyle: true, boxWidth: 8 } },
+            tooltip: { callbacks: { label: c => c.dataset.label + ": " + fmt(c.parsed.y, 0) + " MW" } } } }),
+        });
+        hide("p1Overlay");
+        // CG Live pill = load at the current 5-min slot of today's curve
+        const now = new Date(); const slot = Math.min(287, Math.floor((now.getHours() * 60 + now.getMinutes()) / 5));
+        const live = (d.today[slot] && d.today[slot].load_mw != null) ? d.today[slot].load_mw : d.latest_load_mw;
+        const lp = ov("pillLive");
+        if (live != null) { lp.textContent = "CG Live: " + fmt(live, 0) + " MW"; lp.className = "pill green"; }
+      } catch (e) { destroy("p1"); msg("p1Overlay", "Error: " + e.message); }
+    }
+
+    // ---- PANEL 2: 30-day forecast (smooth single line, model in tooltip) ----
+    async function loadForecast() {
+      spin("p2Overlay");
+      try {
+        const d = await getJSON("/api/cg/forecast/?days=30");
+        const labels = d.forecast.map(r => r.date);
+        const models = d.forecast.map(r => r.model);
+        destroy("p2");
+        charts.p2 = new Chart(ov("p2Chart"), {
+          type: "line",
+          data: { labels, datasets: [
+            { label: "Forecast peak (MW)", data: d.forecast.map(r => r.forecast_mw),
+              borderColor: COL.blue, backgroundColor: "rgba(37,99,235,.08)", borderWidth: 2.4,
+              pointRadius: 0, tension: .4, fill: true },
+          ] },
+          options: commonOpts({ scales: baseScales("Peak load (MW)"), plugins: {
+            legend: { display: false },
+            tooltip: { callbacks: {
+              label: c => "Forecast: " + fmt(c.parsed.y, 0) + " MW",
+              afterLabel: c => "Model: " + (models[c.dataIndex] === "xgboost" ? "XGBoost" : "Prophet") } } } }),
+        });
+        hide("p2Overlay");
+        if (d.summary) {
+          ov("c_peak").innerHTML = fmt(d.summary.today_peak_mw, 0) + ' <small>MW</small>';
+          ov("c_peak30").innerHTML = fmt(d.summary.peak_30d_mw, 0) + ' <small>MW</small>';
+          ov("c_temp").innerHTML = fmt(d.summary.avg_temp_c, 1) + ' <small>°C</small>';
+        }
+        renderForecastTable(d.forecast);
+      } catch (e) {
+        destroy("p2"); msg("p2Overlay", "Error: " + e.message);
+        ov("fcTableBody").innerHTML = '<tr><td colspan="6" class="tmuted">Error: ' + e.message + '</td></tr>';
+      }
+    }
+
+    function modelBadge(m) {
+      return m === "xgboost" ? '<span class="badge xgb">XGBoost</span>'
+                             : '<span class="badge prophet">Prophet</span>';
+    }
+    function tempBadge(src) {
+      if (src === "climatology_30yr") return '<span class="badge clim">30-yr climatology</span>';
+      if (src === "forecast") return '<span class="badge fc">Forecast</span>';
+      if (src === "archive") return '<span class="badge fc">Archive</span>';
+      return '<span class="badge">' + (src || "—") + '</span>';
+    }
+    function renderForecastTable(rows) {
+      const body = rows.map((r, i) =>
+        '<tr>' +
+        '<td>' + (i + 1) + '</td>' +
+        '<td>' + r.date + '</td>' +
+        '<td class="num">' + fmt(r.forecast_mw, 0) + '</td>' +
+        '<td>' + modelBadge(r.model) + '</td>' +
+        '<td class="num">' + (r.temperature_c == null ? "–" : fmt(r.temperature_c, 1)) + '</td>' +
+        '<td>' + tempBadge(r.temp_source) + '</td>' +
+        '</tr>'
+      ).join("");
+      ov("fcTableBody").innerHTML = body || '<tr><td colspan="6" class="tmuted">No data</td></tr>';
+    }
+
+    // ---- PANEL 3: 4 district temperatures ----
+    async function loadDistricts() {
+      spin("p3Overlay");
+      try {
+        const d = await getJSON("/api/cg/districts-temp/?days=30");
+        if (!d.districts || !d.districts.length) { destroy("p3"); msg("p3Overlay", "No data available"); return; }
+        const labels = d.districts[0].series.map(p => p.date);
+        const palette = [COL.d1, COL.d2, COL.d3, COL.d4];
+        const ds = d.districts.map((dist, i) => ({
+          label: dist.name, data: dist.series.map(p => p.temperature_c),
+          borderColor: palette[i % palette.length], backgroundColor: palette[i % palette.length],
+          borderWidth: 1.8, pointRadius: 0, tension: .35, spanGaps: true }));
+        if (d.weighted && d.weighted.length) ds.push({
+          label: "Weighted", data: d.weighted.map(p => p.temperature_c),
+          borderColor: COL.wt, backgroundColor: COL.wt, borderWidth: 2.4, borderDash: [4, 3], pointRadius: 0, tension: .35, spanGaps: true });
+        destroy("p3");
+        charts.p3 = new Chart(ov("p3Chart"), {
+          type: "line", data: { labels, datasets: ds },
+          options: commonOpts({
+            scales: { x: { grid: { color: COL.grid }, ticks: { color: COL.muted, font: FONT, autoSkip: true, maxTicksLimit: 12, maxRotation: 0 } },
+                      y: { grid: { color: COL.grid }, ticks: { color: COL.muted, font: FONT, callback: v => v + "°" }, title: { display: true, text: "Temperature (°C)", color: COL.muted, font: FONT } } },
+            plugins: { legend: { labels: { color: COL.muted, font: FONT, usePointStyle: true, boxWidth: 8 } },
+              tooltip: { callbacks: { label: c => c.dataset.label + ": " + fmt(c.parsed.y, 1) + " °C" } } } }),
+        });
+        hide("p3Overlay");
+        ov("pillTemp").className = "pill green";
+      } catch (e) { destroy("p3"); msg("p3Overlay", "Error: " + e.message); }
+    }
+
+    // ---- PANEL 4: energy trend ----
+    async function loadEnergy() {
+      spin("p4Overlay");
+      try {
+        const d = await getJSON("/api/cg/energy-trend/");
+        if (!d.trend || !d.trend.length) { destroy("p4"); msg("p4Overlay", "No data available"); return; }
+        const labels = d.trend.map(t => (t.partial && t.days < 300) ? (t.year + "*") : t.year);
+        const colors = d.trend.map(t => (t.partial && t.days < 300) ? "#93c5fd" : COL.blue);
+        destroy("p4");
+        charts.p4 = new Chart(ov("p4Chart"), {
+          type: "bar",
+          data: { labels, datasets: [{ label: "Energy (MU)", data: d.trend.map(t => t.total_mu),
+            backgroundColor: colors, hoverBackgroundColor: "#1d4ed8", borderRadius: 4, maxBarThickness: 60 }] },
+          options: commonOpts({ layout: { padding: { top: 22 } }, scales: baseScales("Energy (MU)"),
+            plugins: { legend: { display: false },
+              tooltip: { callbacks: { label: c => fmt(c.parsed.y, 0) + " MU" + (d.trend[c.dataIndex].partial ? " (partial)" : "") } } } }),
+          plugins: [barLabels],
+        });
+        hide("p4Overlay");
+      } catch (e) { destroy("p4"); msg("p4Overlay", "Error: " + e.message); }
+    }
+
+    function stamp() { ov("lastFetch").textContent = "updated " + new Date().toLocaleString(); }
+    function refreshAll() {
+      stamp();
+      Promise.allSettled([loadStats(), loadIntraday(ov("p1date").value || null), loadForecast(), loadDistricts(), loadEnergy()]);
+    }
+
+    ov("p1apply").addEventListener("click", () => loadIntraday(ov("p1date").value || null));
+
+    // initial load — panels load independently
+    stamp();
+    loadStats(); loadIntraday(null); loadForecast(); loadDistricts(); loadEnergy();
+    setInterval(refreshAll, 24 * 60 * 60 * 1000);
+  </script>
+</body>
+</html>

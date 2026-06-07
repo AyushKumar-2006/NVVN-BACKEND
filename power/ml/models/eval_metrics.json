@@ -1,0 +1,41 @@
+{
+  "generated_at": "2026-06-07T01:58:09",
+  "state": "CG_WRLDC",
+  "target": "daily_peak_load_mw",
+  "feature_cols": [
+    "hour",
+    "dayofweek",
+    "month",
+    "is_weekend",
+    "lag_1d",
+    "lag_7d",
+    "rolling_mean_7d"
+  ],
+  "data_count_points": 7503,
+  "n_daily": 2706,
+  "n_train": 2164,
+  "n_test": 542,
+  "test_frac": 0.2,
+  "train_range": [
+    "2019-01-08",
+    "2024-12-10"
+  ],
+  "test_range": [
+    "2024-12-11",
+    "2026-06-05"
+  ],
+  "models": {
+    "xgboost": {
+      "mae": 196.0,
+      "rmse": 272.55,
+      "mape": 3.351,
+      "n": 542
+    },
+    "prophet": {
+      "mae": 339.18,
+      "rmse": 417.09,
+      "mape": 6.147,
+      "n": 542
+    }
+  }
+}
